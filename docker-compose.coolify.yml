@@ -87,7 +87,7 @@ services:
       - static_volume:/app/staticfiles
     # Порт для прямого доступа (опционально, можно использовать домен через Coolify)
     ports:
-      - "${BACKEND_PORT:-8000}:8000"
+      - "${BACKEND_PORT:-8008}:8000"
     environment:
       - DATABASE_HOST=postgres
       - DATABASE_NAME=${DATABASE_NAME:-prosnab_db}
@@ -181,7 +181,7 @@ services:
       dockerfile: Dockerfile
     container_name: ${COMPOSE_PROJECT_NAME:-prosnab}_frontend
     ports:
-      - "${FRONTEND_PORT:-80}:80"
+      - "${FRONTEND_PORT:-3008}:80"
     volumes:
       - media_volume:/app/media
       - static_volume:/app/staticfiles
