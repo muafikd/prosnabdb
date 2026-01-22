@@ -17,7 +17,7 @@
           <el-col :span="6">
             <el-input
               v-model="searchQuery"
-              placeholder="Поиск по названию или номеру КП..."
+              placeholder="Поиск по названию, номеру КП, клиенту или компании..."
               clearable
               @input="handleSearch"
             >
@@ -78,6 +78,11 @@
         <el-table-column label="Клиент" width="200">
           <template #default="{ row }">
             {{ row.client?.client_name || '-' }}
+          </template>
+        </el-table-column>
+        <el-table-column label="Компания" width="200">
+          <template #default="{ row }">
+            {{ row.client?.client_company_name || '-' }}
           </template>
         </el-table-column>
         <el-table-column prop="proposal_date" label="Дата КП" width="120" sortable>

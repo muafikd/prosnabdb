@@ -1196,13 +1196,14 @@ class CommercialProposalListView(generics.ListCreateAPIView):
         else:
             queryset = queryset.filter(is_active=True)
         
-        # Optional search by proposal name or outcoming number
+        # Optional search by proposal name, outcoming number, client name, or company name
         search = self.request.query_params.get('search', None)
         if search:
             queryset = queryset.filter(
                 Q(proposal_name__icontains=search) |
                 Q(outcoming_number__icontains=search) |
-                Q(client__client_name__icontains=search)
+                Q(client__client_name__icontains=search) |
+                Q(client__client_company_name__icontains=search)
             )
         
         # Optional filter by client

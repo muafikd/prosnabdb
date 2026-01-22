@@ -19,7 +19,7 @@
         <div class="search-bar">
           <el-input
             v-model="searchQuery"
-            placeholder="Поиск по номеру или названию КП"
+            placeholder="Поиск по номеру, названию КП, клиенту или компании"
             clearable
             @input="handleSearch"
             style="width: 300px"
@@ -41,6 +41,11 @@
           <el-table-column prop="client_name" label="Клиент" min-width="200">
             <template #default="scope">
               {{ scope.row.client?.client_name }}
+            </template>
+          </el-table-column>
+          <el-table-column label="Компания" min-width="200">
+            <template #default="scope">
+              {{ scope.row.client?.client_company_name || '-' }}
             </template>
           </el-table-column>
           <el-table-column prop="total_price" label="Сумма" width="150">
@@ -85,7 +90,7 @@
             filterable
             remote
             reserve-keyword
-            placeholder="Введите номер КП или клиента"
+            placeholder="Введите номер КП, клиента или компанию"
             :remote-method="searchProposalsForSelect"
             :loading="selectLoading"
             style="width: 100%"
@@ -436,9 +441,40 @@ const getStatusType = (status: string) => {
    return map[status] || 'info'
 }
 
-const formatDate = (dateStr: string) => {
+const formatDate = (dateStr: string | null | undefined) => {
     if (!dateStr) return ''
-    return new Date(dateStr).toLocaleDateString('ru-RU')
+    
+    // If date is already in dd.mm.yyyy format (from backend), return as-is
+    if (typeof dateStr === 'string' && /^\d{2}\.\d{2}\.\d{4}$/.test(dateStr)) {
+        return dateStr
+    }
+    
+    // Try to parse as ISO date or other formats
+    try {
+        const date = new Date(dateStr)
+        if (isNaN(date.getTime())) {
+            // If parsing failed, try to parse as dd.mm.yyyy
+            const parts = dateStr.split('.')
+            if (parts.length === 3) {
+                const dayStr = parts[0]
+                const monthStr = parts[1]
+                const yearStr = parts[2]
+                if (dayStr && monthStr && yearStr) {
+                    const day = parseInt(dayStr, 10)
+                    const month = parseInt(monthStr, 10) - 1 // Month is 0-indexed
+                    const year = parseInt(yearStr, 10)
+                    const parsedDate = new Date(year, month, day)
+                    if (!isNaN(parsedDate.getTime())) {
+                        return parsedDate.toLocaleDateString('ru-RU')
+                    }
+                }
+            }
+            return dateStr // Return as-is if can't parse
+        }
+        return date.toLocaleDateString('ru-RU')
+    } catch (e) {
+        return dateStr // Return as-is if error
+    }
 }
 
 // --- Methods for List ---
@@ -1078,6 +1114,7 @@ onMounted(async () => {
 .header-title-row {
     display: flex;
     align-items: center;
+    color: #080808;
 }
 
 .saving-indicator {
