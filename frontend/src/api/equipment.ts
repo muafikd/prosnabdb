@@ -2,6 +2,11 @@ import apiClient from './axios'
 import type { AxiosResponse } from 'axios'
 
 // Типы для оборудования
+export interface EquipmentImage {
+  name: string
+  url: string
+}
+
 export interface EquipmentDetail {
   detail_id: number
   detail_parameter_name: string
@@ -35,9 +40,10 @@ export interface Equipment {
   details: EquipmentDetail[]
   specifications: EquipmentSpecification[]
   tech_processes: EquipmentTechProcess[]
-  equipment_imagelinks?: string
+  equipment_imagelinks?: EquipmentImage[]
   equipment_videolinks?: string
   equipment_manufacture_price?: string
+  sale_price_kzt?: string
   equipment_madein_country?: string
   equipment_price_currency_type?: string
   created_at: string
@@ -54,14 +60,14 @@ export interface EquipmentCreateData {
   categories?: number[]
   manufacturers?: number[]
   equipment_types?: number[]
-  equipment_imagelinks?: string
+  equipment_imagelinks?: EquipmentImage[]
   equipment_videolinks?: string
   equipment_manufacture_price?: string
   equipment_madein_country?: string
   equipment_price_currency_type?: string
 }
 
-export interface EquipmentUpdateData extends Partial<EquipmentCreateData> {}
+export interface EquipmentUpdateData extends Partial<EquipmentCreateData> { }
 
 export type EquipmentResponse = Equipment[] | { count: number; next: string | null; previous: string | null; results: Equipment[] }
 
@@ -258,7 +264,7 @@ export interface LogisticsCreateData {
   notes?: string
 }
 
-export interface LogisticsUpdateData extends Partial<LogisticsCreateData> {}
+export interface LogisticsUpdateData extends Partial<LogisticsCreateData> { }
 
 export const logisticsAPI = {
   // Получить логистику по оборудованию
@@ -285,3 +291,99 @@ export const logisticsAPI = {
   },
 }
 
+// API функции для документов оборудования
+export interface EquipmentDocument {
+  document_id: number
+  equipment: number
+  document_type: 'passport' | 'certificate' | 'declaration' | 'estimate' | 'manual' | 'other'
+  document_name: string
+  file?: string | null
+  file_url?: string | null
+  file_size?: number | null
+  is_for_client: boolean
+  is_internal: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface EquipmentDocumentCreateData {
+  equipment: number
+  document_type: 'passport' | 'certificate' | 'declaration' | 'estimate' | 'manual' | 'other'
+  document_name: string
+  file?: File | null
+  file_url?: string | null
+  is_for_client?: boolean
+  is_internal?: boolean
+}
+
+export interface EquipmentDocumentUpdateData extends Partial<Omit<EquipmentDocumentCreateData, 'equipment'>> { }
+
+export const equipmentDocumentsAPI = {
+  // Получить документы по оборудованию
+  async getDocumentsByEquipment(equipmentId: number): Promise<EquipmentDocument[]> {
+    const response: AxiosResponse<EquipmentDocument[]> = await apiClient.get('/equipment-documents/', { params: { equipment_id: equipmentId } })
+    return Array.isArray(response.data) ? response.data : (response.data as any).results || []
+  },
+
+  // Создать документ
+  async createDocument(data: EquipmentDocumentCreateData): Promise<EquipmentDocument> {
+    const formData = new FormData()
+    formData.append('equipment', data.equipment.toString())
+    formData.append('document_type', data.document_type)
+    formData.append('document_name', data.document_name)
+    if (data.file) {
+      formData.append('file', data.file)
+    }
+    if (data.file_url) {
+      formData.append('file_url', data.file_url)
+    }
+    if (data.is_for_client !== undefined) {
+      formData.append('is_for_client', data.is_for_client.toString())
+    }
+    if (data.is_internal !== undefined) {
+      formData.append('is_internal', data.is_internal.toString())
+    }
+    
+    const response: AxiosResponse<EquipmentDocument> = await apiClient.post('/equipment-documents/', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+    })
+    return response.data
+  },
+
+  // Обновить документ
+  async updateDocument(documentId: number, data: EquipmentDocumentUpdateData): Promise<EquipmentDocument> {
+    const formData = new FormData()
+    if (data.document_type) {
+      formData.append('document_type', data.document_type)
+    }
+    if (data.document_name) {
+      formData.append('document_name', data.document_name)
+    }
+    if (data.file) {
+      formData.append('file', data.file)
+    }
+    if (data.file_url !== undefined) {
+      formData.append('file_url', data.file_url || '')
+    }
+    if (data.is_for_client !== undefined) {
+      formData.append('is_for_client', data.is_for_client.toString())
+    }
+    if (data.is_internal !== undefined) {
+      formData.append('is_internal', data.is_internal.toString())
+    }
+    
+    const response: AxiosResponse<EquipmentDocument> = await apiClient.patch(`/equipment-documents/${documentId}/`, formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+    })
+    return response.data
+  },
+
+  // Удалить документ
+  async deleteDocument(documentId: number): Promise<void> {
+    await apiClient.delete(`/equipment-documents/${documentId}/`)
+  },
+}

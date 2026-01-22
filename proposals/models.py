@@ -269,7 +269,7 @@ class Equipment(models.Model):
     )
     
     # Additional fields
-    equipment_imagelinks = models.TextField(null=True, blank=True, verbose_name='Ссылки на изображения')
+    equipment_imagelinks = models.JSONField(default=list, blank=True, verbose_name='Ссылки на изображения')
     equipment_videolinks = models.TextField(null=True, blank=True, verbose_name='Ссылки на видео')
     equipment_manufacture_price = models.DecimalField(
         max_digits=15,
@@ -277,6 +277,13 @@ class Equipment(models.Model):
         null=True,
         blank=True,
         verbose_name='Цена производства'
+    )
+    sale_price_kzt = models.DecimalField(
+        max_digits=15,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        verbose_name='Цена продажи (KZT)'
     )
     equipment_madein_country = models.CharField(max_length=100, null=True, blank=True, verbose_name='Страна производства')
     equipment_price_currency_type = models.CharField(max_length=10, null=True, blank=True, verbose_name='Тип валюты')
@@ -610,7 +617,30 @@ class EquipmentListItem(models.Model):
         db_column='equipment_id',
         verbose_name='Единица оборудования'
     )
+    row_expenses = models.JSONField(default=list, blank=True, verbose_name='Расходы на строку')
     quantity = models.PositiveIntegerField(verbose_name='Количество единиц')
+    order = models.PositiveIntegerField(default=0, verbose_name='Порядок')
+    # Итоговые цены после распределения общих расходов
+    price_per_unit = models.DecimalField(
+        max_digits=15, 
+        decimal_places=2, 
+        null=True, 
+        blank=True, 
+        verbose_name='Цена за единицу (итоговая)'
+    )
+    total_price = models.DecimalField(
+        max_digits=15, 
+        decimal_places=2, 
+        null=True, 
+        blank=True, 
+        verbose_name='Общая стоимость (итоговая)'
+    )
+    # Расчетные значения для отображения в форме редактирования
+    calculated_data = models.JSONField(
+        default=dict, 
+        blank=True, 
+        verbose_name='Расчетные данные (маржа, расходы и т.д.)'
+    )
     created_at = models.DateTimeField(auto_now_add=True, verbose_name='Дата создания')
     
     class Meta:
@@ -618,6 +648,7 @@ class EquipmentListItem(models.Model):
         verbose_name = 'Элемент списка (оборудование)'
         verbose_name_plural = 'Элементы списка (оборудование)'
         unique_together = [['equipment_list', 'equipment']]
+        ordering = ['order', 'created_at']
     
     def __str__(self):
         return f"{self.equipment_list.list_id} - {self.equipment.equipment_name} (x{self.quantity})"
@@ -632,6 +663,17 @@ class PaymentLog(models.Model):
     created_at = models.DateTimeField(auto_now_add=True, verbose_name='Дата создания записи')
     updated_at = models.DateTimeField(auto_now=True, verbose_name='Дата обновления записи')
     
+    comments = models.TextField(null=True, blank=True, verbose_name='Комментарии')
+    user = models.ForeignKey(
+        'User',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='payment_logs',
+        db_column='user_id',
+        verbose_name='Кто внес'
+    )
+
     class Meta:
         db_table = 'payment_log'
         verbose_name = 'Платеж'
@@ -675,6 +717,15 @@ class CommercialProposal(models.Model):
         db_column='user_id',
         verbose_name='Создал КП'
     )
+    updated_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='updated_proposals',
+        db_column='updated_by_id',
+        verbose_name='Последний раз обновил'
+    )
     
     # Currency and pricing fields
     currency_ticket = models.CharField(max_length=10, verbose_name='Валюта')
@@ -683,6 +734,10 @@ class CommercialProposal(models.Model):
     total_price = models.DecimalField(max_digits=25, decimal_places=2, verbose_name='Итоговая цена')
     cost_price = models.DecimalField(max_digits=25, decimal_places=2, null=True, blank=True, verbose_name='Себестоимость')
     margin_percentage = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True, verbose_name='Процент маржи')
+    margin_value = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True, verbose_name='Сумма маржи')
+    internal_exchange_rates = models.JSONField(default=list, blank=True, verbose_name='Внутренние курсы валют (snapshot)')
+    additional_services = models.JSONField(default=list, blank=True, verbose_name='Дополнительные услуги')
+    is_active = models.BooleanField(default=True, verbose_name='Активен')
     
     # Proposal details
     proposal_date = models.DateField(verbose_name='Дата КП')
@@ -711,6 +766,7 @@ class CommercialProposal(models.Model):
     # Additional fields
     comments = models.TextField(null=True, blank=True, verbose_name='Комментарии')
     bitrix_lead_link = models.URLField(null=True, blank=True, verbose_name='Ссылка на Битрикс')
+    data_package = models.JSONField(default=dict, blank=True, null=True, verbose_name='Пакет данных для конструктора')
     
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True, verbose_name='Дата создания записи')
@@ -777,7 +833,7 @@ class ExchangeRate(models.Model):
         max_length=20,
         choices=SOURCE_CHOICES,
         default='manual',
-        verbose_name='Источник курса'
+        verbose_name='Источник'
     )
     is_active = models.BooleanField(default=True, verbose_name='Активен')
     is_official = models.BooleanField(default=True, verbose_name='Официальный курс')
@@ -978,3 +1034,77 @@ class CostCalculation(models.Model):
     def __str__(self):
         proposal_info = f" (КП #{self.proposal.proposal_id})" if self.proposal else ""
         return f"Расчёт #{self.calculation_id} для {self.equipment.equipment_name} v{self.calculation_version}{proposal_info}"
+
+class ProposalTemplate(models.Model):
+    """
+    Model for storing custom layout/structure of a Commercial Proposal.
+    """
+    template_id = models.AutoField(primary_key=True, verbose_name='ID шаблона')
+    proposal = models.OneToOneField(
+        CommercialProposal, 
+        on_delete=models.CASCADE, 
+        related_name='template',
+        verbose_name='КП'
+    )
+    layout_data = models.JSONField(default=list, verbose_name='Структура контента')
+    header_data = models.JSONField(default=dict, blank=True, null=True, verbose_name='Данные заголовка')
+    is_final = models.BooleanField(default=False, verbose_name='Зафиксировано')
+    last_edited_by = models.ForeignKey(
+        User, 
+        on_delete=models.SET_NULL, 
+        null=True, 
+        blank=True, 
+        related_name='edited_templates',
+        verbose_name='Последний редактор'
+    )
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='Дата создания')
+    updated_at = models.DateTimeField(auto_now=True, verbose_name='Дата обновления')
+
+    class Meta:
+        db_table = 'proposal_template'
+        verbose_name = 'Шаблон КП'
+        verbose_name_plural = 'Шаблоны КП'
+
+    def __str__(self):
+        return f"Template for {self.proposal.outcoming_number}"
+class SectionTemplate(models.Model):
+    """
+    Model for storing reusable text sections for commercial proposals.
+    Used in the proposal constructor.
+    """
+    name = models.CharField(max_length=255, unique=True, verbose_name='Техническое название')
+    title = models.CharField(max_length=255, verbose_name='Заголовок раздела')
+    text = models.TextField(verbose_name='Содержание')
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='Дата создания')
+    updated_at = models.DateTimeField(auto_now=True, verbose_name='Дата обновления')
+
+    class Meta:
+        db_table = 'section_templates'
+        verbose_name = 'Шаблон раздела'
+        verbose_name_plural = 'Шаблоны разделов'
+
+    def __str__(self):
+        return f"{self.title} ({self.name})"
+
+class SystemSettings(models.Model):
+    """
+    Singleton model for system-wide settings (branding, logo, etc.)
+    """
+    company_logo = models.ImageField(upload_to='company/', null=True, blank=True, verbose_name='Логотип компании')
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'system_settings'
+        verbose_name = 'Системные настройки'
+        verbose_name_plural = 'Системные настройки'
+
+    def save(self, *args, **kwargs):
+        if not self.pk and SystemSettings.objects.exists():
+            # In case of multiple instance creation attempts, just return the existing one
+            return
+        return super().save(*args, **kwargs)
+
+    @classmethod
+    def get_settings(cls):
+        settings, created = cls.objects.get_or_create(pk=1)
+        return settings

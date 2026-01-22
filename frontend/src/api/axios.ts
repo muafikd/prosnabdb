@@ -3,7 +3,7 @@ import Cookies from 'js-cookie'
 import router from '@/router'
 
 // Базовый URL API
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000/api'
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api'
 
 // Создаем экземпляр axios
 const apiClient: AxiosInstance = axios.create({
@@ -18,11 +18,11 @@ const apiClient: AxiosInstance = axios.create({
 apiClient.interceptors.request.use(
   (config: InternalAxiosRequestConfig) => {
     const accessToken = Cookies.get('access_token')
-    
+
     if (accessToken && config.headers) {
       config.headers.Authorization = `Bearer ${accessToken}`
     }
-    
+
     return config
   },
   (error) => {
@@ -44,7 +44,7 @@ apiClient.interceptors.response.use(
 
       try {
         const refreshToken = Cookies.get('refresh_token')
-        
+
         if (!refreshToken) {
           // Нет refresh токена - перенаправляем на логин
           throw new Error('No refresh token')
@@ -62,18 +62,18 @@ apiClient.interceptors.response.use(
 
         // Обновляем заголовок и повторяем запрос
         originalRequest.headers.Authorization = `Bearer ${access}`
-        
+
         return apiClient(originalRequest)
       } catch (refreshError) {
         // Не удалось обновить токен - очищаем cookies и перенаправляем на логин
         Cookies.remove('access_token')
         Cookies.remove('refresh_token')
-        
+
         // Перенаправляем на страницу логина
         if (router.currentRoute.value.path !== '/login') {
           router.push('/login')
         }
-        
+
         return Promise.reject(refreshError)
       }
     }

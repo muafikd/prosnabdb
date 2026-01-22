@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Commercial Proposal</title>
+    <style>
+        @page {
+            size: A4;
+            margin: 1.5cm;
+        }
+        body { 
+            font-family: "DejaVu Sans", sans-serif; 
+            font-size: 10pt; 
+            color: #333;
+        }
+        .header { 
+            margin-bottom: 30px; 
+            border-bottom: 2px solid #2c3e50;
+            padding-bottom: 10px;
+        }
+        .title { 
+            font-size: 18pt; 
+            font-weight: bold; 
+            color: #2c3e50;
+        }
+        .meta {
+            margin-top: 5px;
+            color: #666;
+        }
+        .section {
+            margin-bottom: 20px;
+        }
+        .section-title {
+            font-size: 12pt;
+            font-weight: bold;
+            color: #2c3e50;
+            margin-bottom: 10px;
+            border-bottom: 1px solid #eee;
+        }
+        table { 
+            width: 100%; 
+            border-collapse: collapse; 
+            margin-bottom: 20px; 
+        }
+        th, td { 
+            border: 1px solid #ddd; 
+            padding: 8px; 
+            vertical-align: top;
+        }
+        th { 
+            background-color: #f8f9fa; 
+            font-weight: bold;
+            text-align: left;
+        }
+        .text-right { text-align: right; }
+        .text-center { text-align: center; }
+        .total-section {
+            text-align: right;
+            margin-top: 20px;
+            font-size: 12pt;
+            font-weight: bold;
+        }
+        .service-row {
+            background-color: #fafafa;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <div class="header" style="display: flex; justify-content: space-between; align-items: center;">
+        <div class="logo-container" style="flex: 0 0 30%;">
+            {% if data.company_logo_url %}
+                <img src="{{ data.company_logo_url }}" style="max-height: 80px; max-width: 100%; object-fit: contain;">
+            {% else %}
+                <div style="font-size: 20pt; font-weight: bold; color: #2c3e50;">PROSNAB</div>
+            {% endif %}
+        </div>
+        <div class="header-info" style="flex: 0 0 65%; text-align: right;">
+            <div class="title">Коммерческое предложение № {{ data.proposal.number }}</div>
+            <div class="meta">Дата: {{ data.proposal.date|date:"d.m.Y" }}</div>
+            {% if data.proposal.valid_until %}
+            <div class="meta">Действительно до: {{ data.proposal.valid_until|date:"d.m.Y" }}</div>
+            {% endif %}
+        </div>
+    </div>
+    
+    <div class="section">
+        <div class="section-title">Заказчик</div>
+        {% if data.client.company %}<p><strong>Компания:</strong> {{ data.client.company }}</p>{% endif %}
+        <p><strong>Контактное лицо:</strong> {{ data.client.name }}</p>
+        {% if data.client.phone %}<p><strong>Тел:</strong> {{ data.client.phone }}</p>{% endif %}
+        {% if data.client.email %}<p><strong>Email:</strong> {{ data.client.email }}</p>{% endif %}
+    </div>
+
+    <table class="items-table">
+        <thead>
+            <tr>
+                <th width="5%">№</th>
+                <th width="45%">Наименование</th>
+                <th width="10%">Кол-во</th>
+                <th width="10%">Ед. изм.</th>
+                <th width="15%" class="text-right">Цена</th>
+                <th width="15%" class="text-right">Сумма</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for item in data.equipment_list %}
+            <tr>
+                <td class="text-center">{{ forloop.counter }}</td>
+                <td>
+                    <b>{{ item.name }}</b>
+                    {% if item.description %}
+                    <br><small>{{ item.description }}</small>
+                    {% endif %}
+                </td>
+                <td class="text-center">{{ item.quantity }}</td>
+                <td class="text-center">{{ item.unit }}</td>
+                <td class="text-right">{{ item.price_per_unit|floatformat:2 }} {{ data.proposal.currency }}</td>
+                <td class="text-right">{{ item.total_price|floatformat:2 }} {{ data.proposal.currency }}</td>
+            </tr>
+            {% endfor %}
+            
+            {% if data.additional_services %}
+            {% for service in data.additional_services %}
+            <tr class="service-row">
+                <td></td>
+                <td>
+                    <b>{{ service.name }}</b> (Услуга)
+                </td>
+                <td class="text-center">1</td>
+                <td class="text-center">усл.</td>
+                <td class="text-right">{{ service.price|floatformat:2 }} {{ data.proposal.currency }}</td>
+                <td class="text-right">{{ service.price|floatformat:2 }} {{ data.proposal.currency }}</td>
+            </tr>
+            {% endfor %}
+            {% endif %}
+        </tbody>
+    </table>
+
+    <div class="total-section">
+        <p>Итого: {{ total_price|floatformat:2 }} {{ data.proposal.currency }}</p>
+    </div>
+    
+    <div class="section" style="margin-top: 50px;">
+        <p><strong>С уважением,</strong></p>
+        <p>{{ data.user.name }}</p>
+        <p>{{ data.user.role }}</p>
+        {% if data.user.phone %}<p>{{ data.user.phone }}</p>{% endif %}
+        {% if data.user.email %}<p>{{ data.user.email }}</p>{% endif %}
+    </div>
+</body>
+</html>

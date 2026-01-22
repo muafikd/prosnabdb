@@ -1,9 +1,15 @@
-from rest_framework import status, generics, permissions
+from rest_framework import status, generics, permissions, serializers, viewsets
+from django.views.decorators.csrf import csrf_exempt
+from django.conf import settings
+from rest_framework.views import APIView
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth import logout
-from django.db.models import Q
+from django.db.models import Q, Count, Sum
+from django.utils import timezone
+from datetime import datetime, timedelta
+from rest_framework.exceptions import ValidationError
 try:
     from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiParameter, OpenApiExample
     from drf_spectacular.types import OpenApiTypes
@@ -27,10 +33,10 @@ from .models import (
     EquipmentSpecification, EquipmentTechProcess, Equipment, PurchasePrice,
     Logistics, EquipmentDocument, EquipmentLine, EquipmentLineItem, AdditionalPrices,
     EquipmentList, EquipmentListLineItem, EquipmentListItem, PaymentLog, CommercialProposal,
-    ExchangeRate, CostCalculation
+    ExchangeRate, CostCalculation, ProposalTemplate, SectionTemplate, SystemSettings
 )
 from .serializers import (
-    UserRegistrationSerializer, UserLoginSerializer, UserSerializer,
+    UserRegistrationSerializer, UserLoginSerializer, UserSerializer, UserAdminUpdateSerializer,
     ClientSerializer, CategorySerializer, ManufacturerSerializer,
     EquipmentTypesSerializer, EquipmentDetailsSerializer,
     EquipmentSpecificationSerializer, EquipmentTechProcessSerializer,
@@ -38,10 +44,15 @@ from .serializers import (
     EquipmentDocumentSerializer, EquipmentLineSerializer, EquipmentLineItemSerializer,
     AdditionalPricesSerializer, EquipmentListSerializer, EquipmentListLineItemSerializer,
     EquipmentListItemSerializer, PaymentLogSerializer, CommercialProposalSerializer,
-    ExchangeRateSerializer, CostCalculationSerializer, CostCalculationRequestSerializer
+    EquipmentListItemSerializer, PaymentLogSerializer, CommercialProposalSerializer,
+    ExchangeRateSerializer, CostCalculationSerializer, CostCalculationRequestSerializer, ProposalTemplateSerializer,
+    SectionTemplateSerializer
 )
-from .services import CostCalculationService
-from .permissions import IsManagerOrAdmin
+from .services import CostCalculationService, DataAggregatorService
+from core.services.exchange_rate_service import ExchangeRateService
+from .permissions import IsManagerOrAdmin, IsAdmin
+from .tasks import generate_pdf_task
+from celery.result import AsyncResult
 
 
 class UserRegistrationView(generics.CreateAPIView):
@@ -59,22 +70,61 @@ class UserRegistrationView(generics.CreateAPIView):
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
         
-        # Generate JWT tokens
-        refresh = RefreshToken.for_user(user)
-        
         return Response({
-            'message': 'User registered successfully.',
+            'message': 'Регистрация прошла успешно. Ваша учетная запись скоро активируется вашим руководителем.',
             'user': UserSerializer(user).data,
-            'tokens': {
-                'refresh': str(refresh),
-                'access': str(refresh.access_token),
-            }
         }, status=status.HTTP_201_CREATED)
 
 
+class UserListView(generics.ListAPIView):
+    """
+    Admin-only endpoint to list all users.
+    GET /api/users/
+    """
+    queryset = User.objects.all().order_by('-created_at')
+    serializer_class = UserSerializer
+    permission_classes = [permissions.IsAuthenticated, IsAdmin]
+
+    def get_queryset(self):
+        qs = User.objects.all()
+        search = self.request.query_params.get('search')
+        if search:
+            qs = qs.filter(
+                Q(user_name__icontains=search) |
+                Q(user_login__icontains=search) |
+                Q(user_email__icontains=search)
+            )
+        is_active = self.request.query_params.get('is_active')
+        if is_active is not None and is_active != '':
+            qs = qs.filter(is_active=is_active.lower() == 'true')
+        return qs.order_by('-created_at')
+
+
+class UserAdminUpdateView(generics.RetrieveUpdateAPIView):
+    """
+    Admin-only endpoint to update user's role and activation status.
+    GET/PATCH /api/users/{user_id}/
+    """
+    queryset = User.objects.all()
+    serializer_class = UserAdminUpdateSerializer
+    permission_classes = [permissions.IsAuthenticated, IsAdmin]
+    lookup_field = 'user_id'
+
+    def perform_update(self, serializer):
+        # Prevent admin from deactivating themselves
+        instance = self.get_object()
+        new_is_active = serializer.validated_data.get('is_active', instance.is_active)
+        if instance.user_id == self.request.user.user_id and new_is_active is False:
+            raise ValidationError({'is_active': 'Нельзя деактивировать собственного пользователя.'})
+        serializer.save()
+
+
+@csrf_exempt
 @api_view(['POST'])
 @permission_classes([permissions.AllowAny])
 def login_view(request):
+    print("LOGIN HEADERS:", request.headers)
+    print("LOGIN META:", {k: v for k, v in request.META.items() if k.startswith('HTTP_') or k.startswith('CSRF')})
     """
     Endpoint for user login.
     
@@ -279,6 +329,18 @@ class ManufacturerDetailView(generics.RetrieveUpdateDestroyAPIView):
     serializer_class = ManufacturerSerializer
     permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
     lookup_field = 'manufacturer_id'
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        
+        # Check if manufacturer is used in any equipment
+        if instance.equipment.exists():
+            return Response(
+                {"detail": "Нельзя удалить производителя, так как к нему привязано оборудование"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+            
+        return super().destroy(request, *args, **kwargs)
 
 
 class EquipmentTypesListView(generics.ListCreateAPIView):
@@ -1022,13 +1084,17 @@ class PaymentLogListView(generics.ListCreateAPIView):
     GET /api/payment-logs/ - List all payment logs
     POST /api/payment-logs/ - Create a new payment log
     """
-    queryset = PaymentLog.objects.all()
+    queryset = PaymentLog.objects.select_related('user').all()
     serializer_class = PaymentLogSerializer
     permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
     
+    def perform_create(self, serializer):
+        """Set the user to the current user when creating a payment log."""
+        serializer.save(user=self.request.user)
+    
     def get_queryset(self):
         """Return all payment logs, optionally filtered by search or filters."""
-        queryset = PaymentLog.objects.all()
+        queryset = PaymentLog.objects.select_related('user').all()
         
         # Optional search by payment name
         search = self.request.query_params.get('search', None)
@@ -1061,10 +1127,14 @@ class PaymentLogDetailView(generics.RetrieveUpdateDestroyAPIView):
     PATCH /api/payment-logs/{id}/ - Update payment log (partial update)
     DELETE /api/payment-logs/{id}/ - Delete payment log
     """
-    queryset = PaymentLog.objects.all()
+    queryset = PaymentLog.objects.select_related('user').all()
     serializer_class = PaymentLogSerializer
     permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
     lookup_field = 'payment_id'
+    
+    def perform_update(self, serializer):
+        """Update the user to the current user when updating a payment log."""
+        serializer.save(user=self.request.user)
 
 
 class CommercialProposalListView(generics.ListCreateAPIView):
@@ -1075,7 +1145,7 @@ class CommercialProposalListView(generics.ListCreateAPIView):
     POST /api/commercial-proposals/ - Create a new commercial proposal
     """
     queryset = CommercialProposal.objects.select_related(
-        'client', 'user', 'parent_proposal'
+        'client', 'user', 'updated_by', 'parent_proposal'
     ).prefetch_related(
         'payment_logs', 'equipment_lists'
     ).all()
@@ -1083,24 +1153,28 @@ class CommercialProposalListView(generics.ListCreateAPIView):
     permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
     
     def perform_create(self, serializer):
-        """Create proposal and automatically calculate cost_price and total_price."""
-        proposal = serializer.save()
+        """Create proposal and automatically calculate cost_price, total_price, and margin."""
+        proposal = serializer.save(user=self.request.user, updated_by=self.request.user)
         
-        # Автоматически рассчитываем себестоимость и итоговую цену
+        # Автоматически рассчитываем себестоимость, итоговую цену и маржу
         try:
             cost_price = CostCalculationService.calculate_proposal_cost_price(proposal)
             proposal.cost_price = cost_price
             
-            # Рассчитываем итоговую цену на основе маржи
-            if proposal.margin_percentage:
-                proposal.total_price = CostCalculationService.calculate_proposal_total_price(
-                    cost_price, proposal.margin_percentage
-                )
-            else:
-                # Если маржа не указана, итоговая цена = себестоимость
-                proposal.total_price = cost_price
+            # Рассчитываем итоговую цену и маржу через DataAggregatorService
+            # (использует sale_price_kzt для расчета)
+            from .services import DataAggregatorService
+            from .serializers import _save_prices_to_equipment_list_items
             
-            proposal.save()
+            service = DataAggregatorService(proposal)
+            data_pkg = service.get_full_data_package()
+            
+            # total_price и margin_value/margin_percentage уже обновлены в get_full_data_package
+            proposal.refresh_from_db()
+            
+            # Сохранить итоговые цены в EquipmentListItem
+            if 'equipment_list' in data_pkg:
+                _save_prices_to_equipment_list_items(proposal, data_pkg['equipment_list'])
         except Exception as e:
             # Если не удалось рассчитать, оставляем значения как есть
             import logging
@@ -1110,17 +1184,25 @@ class CommercialProposalListView(generics.ListCreateAPIView):
     def get_queryset(self):
         """Return all commercial proposals, optionally filtered by search or filters."""
         queryset = CommercialProposal.objects.select_related(
-            'client', 'user', 'parent_proposal'
+            'client', 'user', 'updated_by', 'parent_proposal'
         ).prefetch_related(
             'payment_logs', 'equipment_lists'
         ).all()
+        
+        # Soft delete filtering
+        include_inactive = self.request.query_params.get('include_inactive', None)
+        if include_inactive and include_inactive.lower() == 'true':
+            pass  # Do not filter, show all
+        else:
+            queryset = queryset.filter(is_active=True)
         
         # Optional search by proposal name or outcoming number
         search = self.request.query_params.get('search', None)
         if search:
             queryset = queryset.filter(
                 Q(proposal_name__icontains=search) |
-                Q(outcoming_number__icontains=search)
+                Q(outcoming_number__icontains=search) |
+                Q(client__client_name__icontains=search)
             )
         
         # Optional filter by client
@@ -1175,7 +1257,7 @@ class CommercialProposalDetailView(generics.RetrieveUpdateDestroyAPIView):
     DELETE /api/commercial-proposals/{id}/ - Delete commercial proposal
     """
     queryset = CommercialProposal.objects.select_related(
-        'client', 'user', 'parent_proposal'
+        'client', 'user', 'updated_by', 'parent_proposal'
     ).prefetch_related(
         'payment_logs', 'equipment_lists'
     ).all()
@@ -1185,45 +1267,206 @@ class CommercialProposalDetailView(generics.RetrieveUpdateDestroyAPIView):
     
     def perform_update(self, serializer):
         """Update proposal and automatically recalculate cost_price and total_price if equipment changed."""
-        proposal = serializer.save()
+        proposal = serializer.save(updated_by=self.request.user)
         
-        # Автоматически пересчитываем себестоимость и итоговую цену
-        # только если изменилось оборудование или маржа
+        # Автоматически пересчитываем себестоимость, итоговую цену и маржу
         try:
             cost_price = CostCalculationService.calculate_proposal_cost_price(proposal)
             proposal.cost_price = cost_price
             
-            # Рассчитываем итоговую цену на основе маржи
-            if proposal.margin_percentage:
-                proposal.total_price = CostCalculationService.calculate_proposal_total_price(
-                    cost_price, proposal.margin_percentage
-                )
-            else:
-                # Если маржа не указана, итоговая цена = себестоимость
-                proposal.total_price = cost_price
+            # Рассчитываем итоговую цену и маржу через DataAggregatorService
+            # (использует sale_price_kzt для расчета)
+            from .services import DataAggregatorService
+            from .serializers import _save_prices_to_equipment_list_items
             
-            proposal.save()
+            service = DataAggregatorService(proposal)
+            data_pkg = service.get_full_data_package()
+            
+            # total_price и margin_value/margin_percentage уже обновлены в get_full_data_package
+            proposal.refresh_from_db()
+            
+            # Сохранить итоговые цены в EquipmentListItem
+            if 'equipment_list' in data_pkg:
+                _save_prices_to_equipment_list_items(proposal, data_pkg['equipment_list'])
         except Exception as e:
-            # Если не удалось рассчитать, оставляем значения как есть
             import logging
             logger = logging.getLogger(__name__)
             logger.warning(f'Failed to auto-calculate prices for proposal {proposal.proposal_id}: {str(e)}')
 
+    def perform_destroy(self, instance):
+        """Soft delete the proposal."""
+        instance.is_active = False
+        instance.save()
 
-class CommercialProposalPDFView(generics.RetrieveAPIView):
+class CommercialProposalRefreshDataPackageView(APIView):
     """
-    Endpoint for generating and downloading PDF of a commercial proposal.
+    Endpoint for refreshing data_package from proposal data.
     
-    GET /api/commercial-proposals/{id}/pdf/ - Download PDF
+    POST /api/commercial-proposals/{id}/refresh-data-package/
     """
-    queryset = CommercialProposal.objects.select_related(
-        'client', 'user', 'parent_proposal'
-    ).prefetch_related(
-        'payment_logs', 'equipment_lists__equipment_items_relation__equipment',
-        'equipment_lists__line_items__equipment_line'
-    ).all()
+    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+    
+    def _fix_json_serialization(self, obj):
+        """Recursively fix JSON serialization issues in data structures."""
+        from datetime import date, datetime
+        from decimal import Decimal
+        
+        if isinstance(obj, dict):
+            return {k: self._fix_json_serialization(v) for k, v in obj.items()}
+        elif isinstance(obj, (list, tuple)):
+            return [self._fix_json_serialization(item) for item in obj]
+        elif isinstance(obj, (date, datetime)):
+            return obj.isoformat()
+        elif isinstance(obj, Decimal):
+            return float(obj)
+        elif hasattr(obj, '__dict__'):
+            # Handle model instances
+            return str(obj)
+        else:
+            return obj
+    
+    def post(self, request, proposal_id):
+        """Refresh data_package from proposal data and save it to proposal."""
+        try:
+            proposal = CommercialProposal.objects.get(proposal_id=proposal_id)
+        except CommercialProposal.DoesNotExist:
+            return Response({'error': 'Proposal not found'}, status=status.HTTP_404_NOT_FOUND)
+        
+        try:
+            from .services import DataAggregatorService
+            import json
+            import traceback
+            
+            service = DataAggregatorService(proposal)
+            data_pkg = service.get_full_data_package()
+            
+            # Try to serialize to JSON to catch any serialization errors early
+            try:
+                json.dumps(data_pkg, default=str)  # Test serialization
+            except (TypeError, ValueError) as ser_error:
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.error(f"JSON serialization error for proposal {proposal.proposal_id}: {ser_error}")
+                # Try to fix common issues
+                data_pkg = self._fix_json_serialization(data_pkg)
+            
+            # Save to proposal
+            proposal.data_package = data_pkg
+            proposal.save(update_fields=['data_package'])
+            
+            # Сохранить итоговые цены в EquipmentListItem
+            if 'equipment_list' in data_pkg:
+                from .serializers import _save_prices_to_equipment_list_items
+                _save_prices_to_equipment_list_items(proposal, data_pkg['equipment_list'])
+            
+            return Response({
+                'message': 'Data package refreshed successfully',
+                'data_package': data_pkg
+            }, status=status.HTTP_200_OK)
+        except Exception as e:
+            import logging
+            import traceback
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error refreshing data_package for proposal {proposal.proposal_id}: {e}")
+            logger.error(traceback.format_exc())
+            return Response({
+                'error': str(e),
+                'traceback': traceback.format_exc() if settings.DEBUG else None
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class CommercialProposalCopyView(generics.CreateAPIView):
+    """
+    Endpoint for copying a commercial proposal.
+    
+    POST /api/commercial-proposals/{id}/copy/
+    """
+    queryset = CommercialProposal.objects.all()
+    serializer_class = CommercialProposalSerializer
     permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
     lookup_field = 'proposal_id'
+    
+    def post(self, request, *args, **kwargs):
+        from django.db import transaction
+        
+        try:
+            original_proposal = self.get_object()
+            
+            with transaction.atomic():
+                # 1. Create copy of proposal
+                new_proposal = CommercialProposal.objects.get(pk=original_proposal.pk)
+                new_proposal.pk = None
+                new_proposal.proposal_id = None
+                
+                # Update fields
+                new_proposal.proposal_status = 'draft'
+                new_proposal.outcoming_number = f"{original_proposal.outcoming_number} (copy)"
+                # Ensure uniqueness of outcoming_number
+                counter = 1
+                while CommercialProposal.objects.filter(outcoming_number=new_proposal.outcoming_number).exists():
+                    new_proposal.outcoming_number = f"{original_proposal.outcoming_number} (copy {counter})"
+                    counter += 1
+                
+                new_proposal.proposal_name = f"{original_proposal.proposal_name} (Копия)"
+                new_proposal.created_at = None
+                new_proposal.updated_at = None
+                new_proposal.user = request.user
+                new_proposal.updated_by = request.user
+                new_proposal.save()
+                
+                # 2. Copy PaymentLogs
+                for payment in original_proposal.payment_logs.all():
+                    new_payment = PaymentLog.objects.get(pk=payment.pk)
+                    new_payment.pk = None
+                    new_payment.payment_id = None
+                    new_payment.created_at = None
+                    new_payment.updated_at = None
+                    new_payment.save()
+                    new_proposal.payment_logs.add(new_payment)
+                
+                # 3. Copy EquipmentLists and items
+                for eq_list in original_proposal.equipment_lists.all():
+                    new_eq_list = EquipmentList.objects.get(pk=eq_list.pk)
+                    new_eq_list.pk = None
+                    new_eq_list.list_id = None
+                    new_eq_list.proposal = new_proposal
+                    new_eq_list.created_at = None
+                    new_eq_list.updated_at = None
+                    new_eq_list.save()
+                    
+                    # Copy many-to-many additional_prices
+                    new_eq_list.additional_prices.set(eq_list.additional_prices.all())
+                    
+                    # Copy EquipmentListLineItems
+                    for item in eq_list.line_items.all():
+                        new_item = EquipmentListLineItem.objects.get(pk=item.pk)
+                        new_item.pk = None
+                        new_item.id = None  # Django auto id
+                        new_item.equipment_list = new_eq_list
+                        new_item.created_at = None
+                        new_item.save()
+
+                    # Copy EquipmentListItems
+                    for item in eq_list.equipment_items_relation.all():
+                        new_item = EquipmentListItem.objects.get(pk=item.pk)
+                        new_item.pk = None
+                        new_item.id = None # Django auto id
+                        new_item.equipment_list = new_eq_list
+                        new_item.created_at = None
+                        new_item.save()
+                
+                return Response(
+                    CommercialProposalSerializer(new_proposal).data,
+                    status=status.HTTP_201_CREATED
+                )
+                
+        except Exception as e:
+            return Response(
+                {'error': str(e)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+# Removed CommercialProposalPDFView_Old
     
     def retrieve(self, request, *args, **kwargs):
         """Generate and return PDF file."""
@@ -1233,310 +1476,306 @@ class CommercialProposalPDFView(generics.RetrieveAPIView):
         from reportlab.pdfgen import canvas
         from reportlab.lib import colors
         from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak, Image, HRFlowable
         from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT, TA_JUSTIFY
         from reportlab.pdfbase import pdfmetrics
         from reportlab.pdfbase.ttfonts import TTFont
         from django.http import HttpResponse
+        from django.conf import settings
         from decimal import Decimal
         import os
         
         proposal = self.get_object()
         
-        # Регистрируем шрифты с поддержкой кириллицы
-        # Пытаемся найти и зарегистрировать шрифт с поддержкой кириллицы
-        font_name = 'Times-Roman'
-        font_bold = 'Times-Bold'
+        # --- fonts setup ---
+        font_name = 'Arial'
+        font_path = os.path.join(settings.BASE_DIR, 'proposals', 'static', 'proposals', 'fonts', 'Arial.ttf')
         
-        # Пытаемся зарегистрировать системные шрифты с поддержкой кириллицы
         try:
-            # Windows шрифты
-            import platform
-            system = platform.system()
-            
-            if system == 'Windows':
-                # Пытаемся использовать Arial (обычно есть в Windows)
-                arial_paths = [
-                    'C:/Windows/Fonts/arial.ttf',
-                    'C:/Windows/Fonts/ARIAL.TTF',
-                ]
-                for path in arial_paths:
-                    if os.path.exists(path):
-                        pdfmetrics.registerFont(TTFont('CyrillicFont', path))
-                        pdfmetrics.registerFont(TTFont('CyrillicFont-Bold', path.replace('arial.ttf', 'arialbd.ttf').replace('ARIAL.TTF', 'ARIALBD.TTF')))
-                        font_name = 'CyrillicFont'
-                        font_bold = 'CyrillicFont-Bold'
-                        break
-            elif system == 'Linux':
-                # Linux шрифты
-                linux_font_paths = [
-                    '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
-                    '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf',
-                    '/usr/share/fonts/TTF/DejaVuSans.ttf',
-                ]
-                for path in linux_font_paths:
-                    if os.path.exists(path):
-                        pdfmetrics.registerFont(TTFont('CyrillicFont', path))
-                        bold_path = path.replace('DejaVuSans.ttf', 'DejaVuSans-Bold.ttf').replace('LiberationSans-Regular.ttf', 'LiberationSans-Bold.ttf')
-                        if os.path.exists(bold_path):
-                            pdfmetrics.registerFont(TTFont('CyrillicFont-Bold', bold_path))
-                        font_name = 'CyrillicFont'
-                        font_bold = 'CyrillicFont-Bold'
-                        break
+            if os.path.exists(font_path):
+                pdfmetrics.registerFont(TTFont('Arial', font_path))
+                # For bold, we ideally need a bold font file. If not, use standard or same.
+                # Attempt to find Arial Bold if strictly needed, or just register same as Bold (hacky but works for characters)
+                # Ideally:
+                # pdfmetrics.registerFont(TTFont('Arial-Bold', font_path_bold))
+                # Fallback: use same font for 'Arial-Bold' alias if bold not available, or standard Helvetica if ascii
+                pdfmetrics.registerFont(TTFont('Arial-Bold', font_path)) # Using same font, ReportLab might simulate bold or just print normal
+            else:
+                # Fallback to system fonts logic or standard
+                font_name = 'Helvetica' 
         except Exception as e:
-            # Если не удалось зарегистрировать, используем стандартные шрифты
-            # Times-Roman обычно лучше поддерживает кириллицу, чем Helvetica
-            pass
-        
-        # Создаем буфер для PDF
+            # Fallback
+            font_name = 'Helvetica'
+
+        # --- buffer setup ---
         buffer = BytesIO()
-        doc = SimpleDocTemplate(buffer, pagesize=A4, 
-                               rightMargin=20*mm, leftMargin=20*mm,
-                               topMargin=20*mm, bottomMargin=20*mm)
+        doc = SimpleDocTemplate(
+            buffer, 
+            pagesize=A4, 
+            rightMargin=15*mm, 
+            leftMargin=15*mm,
+            topMargin=15*mm, 
+            bottomMargin=15*mm
+        )
         
-        # Контейнер для элементов PDF
         story = []
         styles = getSampleStyleSheet()
         
-        # Функция для экранирования HTML и поддержки кириллицы
+        # Helper: escape html
         def escape_html(text):
-            """Экранирует HTML символы и обеспечивает правильную кодировку."""
-            if text is None:
-                return ""
-            # Убеждаемся, что текст в Unicode
-            if isinstance(text, bytes):
-                text = text.decode('utf-8')
-            else:
-                text = str(text)
-            # Экранируем специальные символы HTML (но сохраняем кириллицу)
-            text = text.replace('&', '&amp;')
-            text = text.replace('<', '&lt;')
-            text = text.replace('>', '&gt;')
-            return text
+            if text is None: return ""
+            if isinstance(text, bytes): text = text.decode('utf-8')
+            else: text = str(text)
+            return text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
         
-        # Стили с использованием шрифтов, поддерживающих кириллицу
-        title_style = ParagraphStyle(
-            'CustomTitle',
-            parent=styles['Heading1'],
-            fontSize=16,
-            textColor=colors.HexColor('#1a1a1a'),
-            spaceAfter=12,
-            alignment=TA_CENTER,
-            fontName=font_bold
-        )
+        # Helper: format money
+        def fmt_money(val, currency=''):
+            s = f"{float(val):,.2f}".replace(',', ' ').replace('.', ',')
+            return f"{s} {currency}".strip()
+
+        # Styles
+        style_title = ParagraphStyle('Title', parent=styles['Heading1'], fontName=font_name, fontSize=18, alignment=TA_LEFT, spaceAfter=20, textColor=colors.HexColor('#2c3e50'))
+        style_heading = ParagraphStyle('Heading', parent=styles['Heading2'], fontName=font_name, fontSize=12, textColor=colors.HexColor('#34495e'), spaceBefore=10, spaceAfter=5)
+        style_normal = ParagraphStyle('Normal', parent=styles['Normal'], fontName=font_name, fontSize=9, leading=12)
+        style_normal_right = ParagraphStyle('NormalRight', parent=style_normal, alignment=TA_RIGHT)
+        style_bold = ParagraphStyle('Bold', parent=style_normal, fontName='Arial-Bold' if font_name == 'Arial' else 'Helvetica-Bold')
+        style_bold_right = ParagraphStyle('BoldRight', parent=style_bold, alignment=TA_RIGHT)
+
+        # --- Header (Logo + Info) ---
+        logo_path = os.path.join(settings.BASE_DIR, 'proposals', 'static', 'proposals', 'images', 'logo.png')
+        if os.path.exists(logo_path):
+            # Logo on the left, Company info on the right
+            im = Image(logo_path, width=50*mm, height=15*mm)
+            im.hAlign = 'LEFT'
+            story.append(im)
+            story.append(Spacer(1, 5*mm))
+
+        # Title Row
+        story.append(Paragraph(f"Коммерческое предложение № {escape_html(proposal.outcoming_number)}", style_title))
+        story.append(Paragraph(f"Дата: {proposal.proposal_date.strftime('%d.%m.%Y')}", style_normal))
+        if proposal.valid_until:
+             story.append(Paragraph(f"Действительно до: {proposal.valid_until.strftime('%d.%m.%Y')}", style_normal))
         
-        heading_style = ParagraphStyle(
-            'CustomHeading',
-            parent=styles['Heading2'],
-            fontSize=12,
-            textColor=colors.HexColor('#333333'),
-            spaceAfter=8,
-            spaceBefore=12,
-            fontName=font_bold
-        )
-        
-        normal_style = ParagraphStyle(
-            'CustomNormal',
-            parent=styles['Normal'],
-            fontSize=10,
-            textColor=colors.HexColor('#000000'),
-            spaceAfter=6,
-            alignment=TA_LEFT,
-            fontName=font_name
-        )
-        
-        # Заголовок
-        story.append(Paragraph(escape_html(proposal.proposal_name), title_style))
         story.append(Spacer(1, 5*mm))
+
+        # --- Client Info ---
+        story.append(Paragraph("Заказчик:", style_heading))
+        client_data = []
+        if proposal.client.client_company_name: client_data.append(f"Компания: {proposal.client.client_company_name}")
+        client_data.append(f"Контактное лицо: {proposal.client.client_name}")
+        if proposal.client.client_phone: client_data.append(f"Тел: {proposal.client.client_phone}")
+        if proposal.client.client_email: client_data.append(f"Email: {proposal.client.client_email}")
         
-        # Номер КП и дата
-        header_data = [
-            [f"<b>Номер КП:</b> {escape_html(proposal.outcoming_number)}", 
-             f"<b>Дата:</b> {proposal.proposal_date.strftime('%d.%m.%Y')}"],
-        ]
-        header_table = Table(header_data, colWidths=[100*mm, 70*mm])
-        header_table.setStyle(TableStyle([
-            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-            ('FONTNAME', (0, 0), (-1, -1), font_name),
-            ('FONTSIZE', (0, 0), (-1, -1), 10),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
-        ]))
-        story.append(header_table)
+        for line in client_data:
+            story.append(Paragraph(escape_html(line), style_normal))
+            
         story.append(Spacer(1, 5*mm))
+
+        # --- Equipment Table ---
+        story.append(Paragraph("Спецификация оборудования:", style_heading))
         
-        # Информация о клиенте
-        story.append(Paragraph("<b>Клиент:</b>", heading_style))
-        client_info = []
-        if proposal.client.client_company_name:
-            client_info.append(f"Компания: {escape_html(proposal.client.client_company_name)}")
-        client_info.append(f"Контактное лицо: {escape_html(proposal.client.client_name)}")
-        if proposal.client.client_address:
-            client_info.append(f"Адрес: {escape_html(proposal.client.client_address)}")
-        if proposal.client.client_phone:
-            client_info.append(f"Телефон: {escape_html(proposal.client.client_phone)}")
-        if proposal.client.client_email:
-            client_info.append(f"Email: {escape_html(proposal.client.client_email)}")
-        if proposal.client.client_bin_iin:
-            client_info.append(f"БИН/ИИН: {escape_html(proposal.client.client_bin_iin)}")
+        # Headers
+        table_data = [[
+            Paragraph("№", style_bold),
+            Paragraph("Наименование / Описание", style_bold),
+            Paragraph("Кол-во", style_bold),
+            Paragraph("Цена ед.", style_bold),
+            Paragraph("Сумма", style_bold),
+        ]]
         
-        for info in client_info:
-            story.append(Paragraph(info, normal_style))
-        story.append(Spacer(1, 5*mm))
+        col_widths = [10*mm, 90*mm, 15*mm, 30*mm, 35*mm]
         
-        # Таблица оборудования
-        story.append(Paragraph("<b>Оборудование:</b>", heading_style))
+        total_equipment = Decimal('0')
+        row_counter = 1
         
-        # Собираем все оборудование из списков
-        equipment_data = [[Paragraph("№", normal_style), 
-                          Paragraph("Наименование", normal_style), 
-                          Paragraph("Кол-во", normal_style), 
-                          Paragraph("Цена за ед.", normal_style), 
-                          Paragraph("Стоимость", normal_style)]]
-        equipment_num = 1
-        total_equipment_cost = Decimal('0')
-        
-        for equipment_list in proposal.equipment_lists.all():
-            # Оборудование из списка
-            for item in equipment_list.equipment_items_relation.all():
+        # Iterate equipment
+        for eq_list in proposal.equipment_lists.all():
+            for item in eq_list.equipment_items_relation.all():
                 equipment = item.equipment
-                quantity = item.quantity
+                qty = item.quantity
                 
-                # Получаем цену закупки (активную)
+                # Base Price
                 price_obj = equipment.purchase_prices.filter(is_active=True).order_by('-created_at').first()
                 unit_price = Decimal('0')
                 if price_obj:
                     unit_price = price_obj.price
-                    # Конвертируем в валюту КП, если нужно
-                    if price_obj.currency != proposal.currency_ticket:
-                        # Упрощенная конвертация через курс из КП
-                        if proposal.exchange_rate:
-                            if price_obj.currency == 'RUB' and proposal.currency_ticket == 'KZT':
-                                unit_price = unit_price * proposal.exchange_rate
-                            elif price_obj.currency == 'KZT' and proposal.currency_ticket == 'RUB':
-                                unit_price = unit_price / proposal.exchange_rate
+                    # Convert to Proposal Currency
+                    if price_obj.currency != proposal.currency_ticket and proposal.exchange_rate:
+                        if proposal.currency_ticket == 'KZT' and price_obj.currency != 'KZT':
+                             # Assuming exchange_rate is KZT per 1 unit of Foreign Currency
+                             unit_price = unit_price * proposal.exchange_rate
+                        elif proposal.currency_ticket != 'KZT' and price_obj.currency == 'KZT':
+                             unit_price = unit_price / proposal.exchange_rate
+                        # Note: Cross-currency (e.g. RUB to USD) logic deferred, assume KZT pivot
                 
-                total_price = unit_price * quantity
-                total_equipment_cost += total_price
+                # Row Expenses (stored in JSON field `row_expenses`)
+                row_expenses_sum = Decimal('0')
+                expenses_desc = []
+                if item.row_expenses:
+                    for exp in item.row_expenses:
+                        try:
+                            val = Decimal(str(exp.get('value', 0)))
+                            # Assume expense value is in KZT. If proposal is not KZT, convert.
+                            if proposal.currency_ticket != 'KZT' and proposal.exchange_rate:
+                                val = val / proposal.exchange_rate
+                            row_expenses_sum += val
+                            expenses_desc.append(f"{exp.get('name', 'Расход')}: {fmt_money(val, proposal.currency_ticket)}")
+                        except: pass
                 
-                # Форматируем числа для отображения
-                unit_price_str = f"{float(unit_price):,.2f}".replace(',', ' ').replace('.', ',')
-                total_price_str = f"{float(total_price):,.2f}".replace(',', ' ').replace('.', ',')
+                # Total for this item (Unit Price + Expenses per unit? Or Expenses are total?)
+                # Usually row expenses are "per item" or "for the line". 
+                # Frontend logic `calculateRowTotal`: (production_price * rate * quantity) + expenses. Matches "expenses for the line".
                 
-                equipment_data.append([
-                    Paragraph(str(equipment_num), normal_style),
-                    Paragraph(escape_html(equipment.equipment_name), normal_style),
-                    Paragraph(str(quantity), normal_style),
-                    Paragraph(f"{unit_price_str} {proposal.currency_ticket}", normal_style),
-                    Paragraph(f"{total_price_str} {proposal.currency_ticket}", normal_style)
+                # Base sum for line
+                line_base_sum = unit_price * qty
+                line_total_sum = line_base_sum + row_expenses_sum
+                
+                # Unit price for display (effective unit price?) -> Let's show base unit price, and separate expenses
+                
+                # Main Row
+                table_data.append([
+                    Paragraph(str(row_counter), style_normal),
+                    Paragraph(escape_html(equipment.equipment_name), style_normal),
+                    Paragraph(str(qty), style_normal),
+                    Paragraph(fmt_money(unit_price, proposal.currency_ticket), style_normal_right),
+                    Paragraph(fmt_money(line_total_sum, proposal.currency_ticket), style_normal_right),
                 ])
-                equipment_num += 1
-        
-        # Создаем таблицу оборудования
-        equipment_table = Table(equipment_data, colWidths=[15*mm, 80*mm, 20*mm, 30*mm, 35*mm])
-        equipment_table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
-            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ('FONTNAME', (0, 0), (-1, 0), font_bold),
-            ('FONTSIZE', (0, 0), (-1, 0), 10),
-            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-            ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
-            ('TEXTCOLOR', (0, 1), (-1, -1), colors.black),
-            ('FONTNAME', (0, 1), (-1, -1), font_name),
-            ('FONTSIZE', (0, 1), (-1, -1), 9),
-            ('GRID', (0, 0), (-1, -1), 1, colors.black),
-            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ('ALIGN', (1, 1), (1, -1), 'LEFT'),  # Наименование выравниваем по левому краю
+                
+                # If expenses exist, show detailed note
+                if expenses_desc:
+                    desc_text = "Включено: " + "; ".join(expenses_desc)
+                    table_data.append([
+                        "",
+                        Paragraph(desc_text, ParagraphStyle('SmallNote', parent=style_normal, fontSize=8, textColor=colors.gray)),
+                        "", "", ""
+                    ])
+                
+                total_equipment += line_total_sum
+                row_counter += 1
+
+        # Table Styling
+        t = Table(table_data, colWidths=col_widths, repeatRows=1)
+        t.setStyle(TableStyle([
+            ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#f8f9fa')),
+            ('TEXTCOLOR', (0,0), (-1,0), colors.black),
+            ('ALIGN', (0,0), (-1,-1), 'LEFT'),
+            ('ALIGN', (2,0), (-1,-1), 'RIGHT'), # Qty, Price, Sum aligned right
+            ('VALIGN', (0,0), (-1,-1), 'TOP'),
+            ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor('#e5e7eb')),
+            ('FONTNAME', (0,0), (-1,-1), font_name),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 8),
+            ('TOPPADDING', (0,0), (-1,-1), 8),
         ]))
-        story.append(equipment_table)
+        story.append(t)
         story.append(Spacer(1, 5*mm))
         
-        # Итоговая стоимость
+        # --- Totals & Global Expenses ---
         summary_data = []
-        subtotal = total_equipment_cost
         
-        # Налоги и доставка из EquipmentList
-        for equipment_list in proposal.equipment_lists.all():
-            if equipment_list.tax_percentage:
-                tax_amount = subtotal * (equipment_list.tax_percentage / Decimal('100'))
-                tax_str = f"{float(tax_amount):,.2f}".replace(',', ' ').replace('.', ',')
-                summary_data.append([
-                    Paragraph("Налог", normal_style), 
-                    Paragraph(f"{equipment_list.tax_percentage}%", normal_style), 
-                    Paragraph(f"{tax_str} {proposal.currency_ticket}", normal_style)
-                ])
-                subtotal += tax_amount
-            
-            if equipment_list.delivery_percentage:
-                delivery_amount = total_equipment_cost * (equipment_list.delivery_percentage / Decimal('100'))
-                delivery_str = f"{float(delivery_amount):,.2f}".replace(',', ' ').replace('.', ',')
-                summary_data.append([
-                    Paragraph("Доставка", normal_style), 
-                    Paragraph(f"{equipment_list.delivery_percentage}%", normal_style), 
-                    Paragraph(f"{delivery_str} {proposal.currency_ticket}", normal_style)
-                ])
-                subtotal += delivery_amount
-        
-        # Форматируем итоговую цену
-        total_price_str = f"{float(proposal.total_price):,.2f}".replace(',', ' ').replace('.', ',')
+        # Subtotal
         summary_data.append([
-            Paragraph("<b>Итого:</b>", heading_style), 
-            Paragraph("", normal_style), 
-            Paragraph(f"<b>{total_price_str} {proposal.currency_ticket}</b>", heading_style)
+            Paragraph("Итого оборудование:", style_bold),
+            Paragraph(fmt_money(total_equipment, proposal.currency_ticket), style_bold_right)
         ])
         
-        summary_table = Table(summary_data, colWidths=[60*mm, 40*mm, 80*mm])
-        summary_table.setStyle(TableStyle([
-            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-            ('ALIGN', (2, 0), (2, -1), 'RIGHT'),
-            ('FONTNAME', (0, 0), (-1, -2), font_name),
-            ('FONTNAME', (0, -1), (-1, -1), font_bold),
-            ('FONTSIZE', (0, 0), (-1, -1), 10),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
-            ('TOPPADDING', (0, 0), (-1, -1), 6),
+        # Global Expenses (from EquipmentList.additional_prices)
+        current_sum = total_equipment
+        
+        # Additional Services
+        if proposal.additional_services:
+             for svc in proposal.additional_services:
+                 price = Decimal(str(svc.get('price', 0)))
+                 summary_data.append([
+                     Paragraph(f"{svc.get('name')}:", style_normal),
+                     Paragraph(f"+ {fmt_money(price, proposal.currency_ticket)}", style_normal_right)
+                 ])
+                 current_sum += price
+        
+        seen_expenses = set() # Avoid dupes if multiple lists share same expense (though usually one list per proposal)
+        
+        for eq_list in proposal.equipment_lists.all():
+            for ap in eq_list.additional_prices.all():
+                if ap.price_id in seen_expenses: continue
+                seen_expenses.add(ap.price_id)
+                
+                amount = Decimal('0')
+                if ap.value_type == 'percentage':
+                    # Percentage of current equipment sum
+                    amount = total_equipment * (ap.price_parameter_value / Decimal('100'))
+                elif ap.value_type == 'fixed':
+                    amount = ap.price_parameter_value
+                    # Convert if needed
+                    if proposal.currency_ticket != 'KZT' and proposal.exchange_rate:
+                         amount = amount / proposal.exchange_rate
+                
+                current_sum += amount
+                summary_data.append([
+                    Paragraph(f"{ap.price_parameter_name} ({ap.expense_type}):", style_normal),
+                    Paragraph(f"+ {fmt_money(amount, proposal.currency_ticket)}", style_normal_right)
+                ])
+
+            # Tax & Delivery
+            if eq_list.tax_percentage:
+                 tax = current_sum * (eq_list.tax_percentage / Decimal('100'))
+                 current_sum += tax
+                 summary_data.append([
+                     Paragraph(f"Налог ({eq_list.tax_percentage}%):", style_normal),
+                     Paragraph(f"+ {fmt_money(tax, proposal.currency_ticket)}", style_normal_right)
+                 ])
+            
+            if eq_list.delivery_percentage:
+                 delivery = total_equipment * (eq_list.delivery_percentage / Decimal('100'))
+                 current_sum += delivery
+                 summary_data.append([
+                     Paragraph(f"Доставка ({eq_list.delivery_percentage}%):", style_normal),
+                     Paragraph(f"+ {fmt_money(delivery, proposal.currency_ticket)}", style_normal_right)
+                 ])
+
+        # Final Total
+        summary_data.append([
+            Paragraph("ИТОГО:", ParagraphStyle('TotalLabel', parent=style_title, fontSize=12)),
+            Paragraph(fmt_money(proposal.total_price, proposal.currency_ticket), ParagraphStyle('TotalVal', parent=style_title, fontSize=12, alignment=TA_RIGHT))
+        ])
+        
+        # Summary Table
+        st = Table(summary_data, colWidths=[120*mm, 60*mm])
+        st.setStyle(TableStyle([
+            ('ALIGN', (0,0), (-1,-1), 'LEFT'),
+            ('LINEABOVE', (0,-1), (-1,-1), 1, colors.black),
+            ('TOPPADDING', (0,-1), (-1,-1), 10),
         ]))
-        story.append(summary_table)
+        story.append(st)
+        
         story.append(Spacer(1, 10*mm))
         
-        # Условия
-        story.append(Paragraph("<b>Условия:</b>", heading_style))
-        
-        conditions = []
+        # --- Footer / Terms ---
         if proposal.delivery_time:
-            conditions.append(f"<b>Срок доставки:</b> {escape_html(proposal.delivery_time)}")
+             story.append(Paragraph(f"<b>Срок поставки:</b> {escape_html(proposal.delivery_time)}", style_normal))
         if proposal.warranty:
-            conditions.append(f"<b>Гарантия:</b> {escape_html(proposal.warranty)}")
-        if proposal.valid_until:
-            conditions.append(f"<b>Срок действия КП:</b> до {proposal.valid_until.strftime('%d.%m.%Y')}")
-        
-        # Условия оплаты
-        if proposal.payment_logs.exists():
-            conditions.append("<b>Условия оплаты:</b>")
-            for payment in proposal.payment_logs.all():
-                payment_str = f"{float(payment.payment_value):,.2f}".replace(',', ' ').replace('.', ',')
-                conditions.append(f"  • {escape_html(payment.payment_name)}: {payment_str} {proposal.currency_ticket} ({payment.payment_date.strftime('%d.%m.%Y')})")
-        
-        for condition in conditions:
-            story.append(Paragraph(condition, normal_style))
-        
+             story.append(Paragraph(f"<b>Гарантия:</b> {escape_html(proposal.warranty)}", style_normal))
         if proposal.comments:
-            story.append(Spacer(1, 5*mm))
-            story.append(Paragraph("<b>Примечания:</b>", heading_style))
-            story.append(Paragraph(escape_html(proposal.comments), normal_style))
+             story.append(Paragraph(f"<b>Примечание:</b> {escape_html(proposal.comments)}", style_normal))
+             
+        story.append(Spacer(1, 15*mm))
         
-        # Генерируем PDF
+        # Signatures
+        sig_data = [
+            [Paragraph("__________________________<br/>Подпись", style_normal), 
+             Paragraph("__________________________<br/>Дата", style_normal)]
+        ]
+        sig_table = Table(sig_data, colWidths=[90*mm, 90*mm])
+        story.append(sig_table)
+        
         doc.build(story)
         
-        # Получаем PDF из буфера
         pdf = buffer.getvalue()
         buffer.close()
         
-        # Создаем HTTP ответ
         response = HttpResponse(pdf, content_type='application/pdf')
-        filename = f"КП_{proposal.outcoming_number.replace(' ', '_').replace('/', '_')}.pdf"
+        filename = f"Proposal_{proposal.outcoming_number}.pdf"
         response['Content-Disposition'] = f'attachment; filename="{filename}"'
-        
         return response
+        
 
 
 class ExchangeRateListView(generics.ListCreateAPIView):
@@ -1612,22 +1851,161 @@ class ExchangeRateListView(generics.ListCreateAPIView):
         # Optional: get latest rate for currency pair
         latest = self.request.query_params.get('latest', None)
         if latest and latest.lower() == 'true':
+            base_qs = ExchangeRate.objects.filter(
+                is_active=True,
+                proposal__isnull=True,
+                is_official=True
+            ).order_by('-rate_date', '-updated_at', '-created_at')
+
             if currency_from and currency_to:
-                # Get the latest active rate for this currency pair
-                latest_rate = ExchangeRate.objects.filter(
+                latest_rate = base_qs.filter(
                     currency_from=currency_from,
-                    currency_to=currency_to,
-                    is_active=True,
-                    proposal__isnull=True,
-                    is_official=True
-                ).order_by('-rate_date', '-created_at').first()
-                
+                    currency_to=currency_to
+                ).first()
                 if latest_rate:
                     queryset = queryset.filter(rate_id=latest_rate.rate_id)
                 else:
                     queryset = queryset.none()
+            else:
+                seen = set()
+                ids = []
+                for r in base_qs:
+                    key = (r.currency_from, r.currency_to)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    ids.append(r.rate_id)
+                queryset = queryset.filter(rate_id__in=ids)
+
+        return queryset.order_by('-rate_date', '-updated_at', '-created_at')
+
+
+class ExchangeRateSyncView(generics.GenericAPIView):
+    """
+    Endpoint to manually trigger exchange rate synchronization.
+    
+    POST /api/exchange-rates/sync/
+    """
+    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+    serializer_class = serializers.Serializer # Generic placeholder
+    
+    def post(self, request, *args, **kwargs):
+        try:
+            stats = ExchangeRateService.fetch_and_sync_rates()
+            return Response({
+                'message': 'Synchronization completed successfully.',
+                'stats': stats
+            })
+        except Exception as e:
+            return Response({
+                'error': f'Synchronization failed: {str(e)}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class ExchangeRateAddView(generics.GenericAPIView):
+    """
+    Endpoint to add a new currency ticker.
+    Checks availability in NB RK API and saves it.
+    
+    POST /api/exchange-rates/add/
+    Body: {"currency_code": "GBP"}
+    """
+    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+    serializer_class = serializers.Serializer # Placeholder
+    
+    @extend_schema(
+        parameters=[
+            OpenApiParameter(name='currency_code', description='Currency code (e.g. GBP)', required=True, type=OpenApiTypes.STR),
+        ]
+    )
+    def post(self, request, *args, **kwargs):
+        currency_code = request.data.get('currency_code') or request.query_params.get('currency_code')
         
-        return queryset.order_by('-rate_date', '-created_at')
+        if not currency_code:
+            return Response({'error': 'currency_code is required'}, status=status.HTTP_400_BAD_REQUEST)
+            
+        currency_code = currency_code.upper()
+        
+        try:
+            # 1. Fetch current rates
+            # We import here to avoid circular dependencies if any, though top-level should be fine
+            # Re-using logic or calling service properly
+            # Actually, let's just use the service but we need to fetch all, finding specific one
+            
+            # Using raw requests here to avoid changing service logic which filters strict list
+            import requests
+            import xmltodict
+            from decimal import Decimal
+            from django.utils import timezone
+            
+            date_obj = timezone.now().date()
+            formatted_date = date_obj.strftime("%d.%m.%Y")
+            url = f"{ExchangeRateService.RSS_URL}?fdate={formatted_date}"
+            
+            response = requests.get(url, timeout=10)
+            response.raise_for_status()
+            data = xmltodict.parse(response.content)
+            
+            # Support both XML formats
+            items = []
+            if 'rss' in data and 'channel' in data['rss']:
+                 items = data['rss']['channel'].get('item', [])
+            elif 'rates' in data:
+                 items = data['rates'].get('item', [])
+            
+            if not isinstance(items, list):
+                items = [items]
+                
+            # 2. Find requested currency
+            found_item = None
+            for item in items:
+                if item.get('title', '').strip() == currency_code:
+                    found_item = item
+                    break
+            
+            if not found_item:
+                return Response({
+                    'error': f'Currency {currency_code} not found in National Bank RK API for today.'
+                }, status=status.HTTP_404_NOT_FOUND)
+                
+            # 3. Create ExchangeRate
+            existing_manual = ExchangeRate.objects.filter(
+                rate_date=date_obj,
+                currency_from=currency_code,
+                currency_to='KZT',
+                source='manual'
+            ).exists()
+            
+            if existing_manual:
+                return Response({
+                    'message': f'Manual rate for {currency_code} already exists for today.',
+                    'status': 'skipped'
+                })
+            
+            rate_value = Decimal(found_item.get('description', '').replace(',', '.'))
+            
+            obj, created = ExchangeRate.objects.update_or_create(
+                rate_date=date_obj,
+                currency_from=currency_code,
+                currency_to='KZT',
+                defaults={
+                    'rate_value': rate_value,
+                    'source': 'api_nb_rk',
+                    'is_active': True,
+                    'is_official': True
+                }
+            )
+            
+            return Response({
+                'message': f'Currency {currency_code} added/updated successfully.',
+                'rate': ExchangeRateSerializer(obj).data,
+                'created': created
+            })
+            
+        except Exception as e:
+            return Response({
+                'error': f'Failed to add currency: {str(e)}'
+            }, status=status.HTTP_400_BAD_REQUEST)
     
     def perform_create(self, serializer):
         """Set created_by to current user if not provided."""
@@ -1899,3 +2277,831 @@ class CostCalculationEquipmentHistoryView(generics.ListAPIView):
             queryset = queryset.filter(proposal__isnull=True)
         
         return queryset.order_by('-calculation_version', '-created_at')
+
+from rest_framework import viewsets
+from rest_framework.decorators import action
+from django.http import HttpResponse
+from django_filters.rest_framework import DjangoFilterBackend
+
+class ProposalTemplateViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for ProposalTemplate.
+    """
+    queryset = ProposalTemplate.objects.all()
+    serializer_class = ProposalTemplateSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    filter_backends = [DjangoFilterBackend]
+    filterset_fields = ['proposal']
+
+    @action(detail=True, methods=['get'], url_path='export-pdf')
+    def export_pdf(self, request, pk=None):
+        """Generate PDF synchronously or asynchronously based on query param."""
+        template = self.get_object()
+        
+        # Check if sync parameter is explicitly set (default to async for better performance)
+        sync_mode = request.query_params.get('sync', 'false').lower() == 'true'
+        async_mode = request.query_params.get('async', 'true').lower() == 'true'
+        
+        # Use async by default for better performance, sync only if explicitly requested
+        if not sync_mode and async_mode:
+            # Asynchronous generation (default)
+            from .tasks import generate_pdf_task
+            task = generate_pdf_task.delay(template.template_id)
+            return Response({'task_id': task.id}, status=status.HTTP_202_ACCEPTED)
+        else:
+            # Synchronous generation - return PDF directly (only if explicitly requested)
+            try:
+                from .services import ExportService
+                from weasyprint import HTML
+                from django.http import HttpResponse
+                from django.conf import settings
+                import io
+                
+                service = ExportService(template)
+                html_content = service.generate_pdf_html()
+                
+                # Generate PDF in memory with optimizations
+                pdf_buffer = io.BytesIO()
+                HTML(
+                    string=html_content, 
+                    base_url=str(settings.BASE_DIR)
+                ).write_pdf(
+                    pdf_buffer,
+                    optimize_images=True  # Optimize images for faster generation
+                )
+                pdf_buffer.seek(0)
+                
+                # Return PDF as response
+                response = HttpResponse(pdf_buffer.read(), content_type='application/pdf')
+                safe_number = str(template.proposal.outcoming_number).replace('/', '_').replace(' ', '_')
+                filename = f"proposal_{safe_number}.pdf"
+                response['Content-Disposition'] = f'attachment; filename="{filename}"'
+                return response
+                
+            except Exception as e:
+                import logging
+                import traceback
+                logger = logging.getLogger(__name__)
+                logger.error(f"PDF generation failed for template {template.template_id}: {e}")
+                logger.error(traceback.format_exc())
+                return Response({
+                    'error': str(e),
+                    'traceback': traceback.format_exc() if settings.DEBUG else None
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=True, methods=['post'], url_path='refresh-data-package')
+    def refresh_data_package(self, request, pk=None):
+        """Refresh data_package from proposal data and save it to proposal."""
+        template = self.get_object()
+        proposal = template.proposal
+        
+        try:
+            from .services import DataAggregatorService
+            import json
+            import traceback
+            
+            service = DataAggregatorService(proposal)
+            data_pkg = service.get_full_data_package()
+            
+            # Try to serialize to JSON to catch any serialization errors early
+            try:
+                json.dumps(data_pkg, default=str)  # Test serialization
+            except (TypeError, ValueError) as ser_error:
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.error(f"JSON serialization error for proposal {proposal.proposal_id}: {ser_error}")
+                # Try to fix common issues
+                data_pkg = self._fix_json_serialization(data_pkg)
+            
+            # Save to proposal
+            proposal.data_package = data_pkg
+            proposal.save(update_fields=['data_package'])
+            
+            # Сохранить итоговые цены в EquipmentListItem
+            if 'equipment_list' in data_pkg:
+                from .serializers import _save_prices_to_equipment_list_items
+                _save_prices_to_equipment_list_items(proposal, data_pkg['equipment_list'])
+            
+            return Response({
+                'message': 'Data package refreshed successfully',
+                'data_package': data_pkg
+            }, status=status.HTTP_200_OK)
+        except Exception as e:
+            import logging
+            import traceback
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error refreshing data_package for proposal {proposal.proposal_id}: {e}")
+            logger.error(traceback.format_exc())
+            return Response({
+                'error': str(e),
+                'traceback': traceback.format_exc() if settings.DEBUG else None
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    
+    def _fix_json_serialization(self, obj):
+        """Recursively fix JSON serialization issues in data structures."""
+        from datetime import date, datetime
+        from decimal import Decimal
+        
+        if isinstance(obj, dict):
+            return {k: self._fix_json_serialization(v) for k, v in obj.items()}
+        elif isinstance(obj, (list, tuple)):
+            return [self._fix_json_serialization(item) for item in obj]
+        elif isinstance(obj, (date, datetime)):
+            return obj.isoformat()
+        elif isinstance(obj, Decimal):
+            return float(obj)
+        elif hasattr(obj, '__dict__'):
+            # Handle model instances
+            return str(obj)
+        else:
+            return obj
+
+    def _generate_equipment_details_html(self, proposal):
+        """Generate HTML for equipment details parameter list."""
+        html = '<div class="equipment-details">'
+        for eq_list in proposal.equipment_lists.all():
+            for item in eq_list.equipment_items_relation.all():
+                equipment = item.equipment
+                details = equipment.details.all()
+                if details:
+                    html += f"<h3>{equipment.equipment_name}</h3><ul>"
+                    for detail in details:
+                        html += f"<li><strong>{detail.detail_parameter_name}:</strong> {detail.detail_parameter_value}</li>"
+                    html += "</ul>"
+        html += '</div>'
+        return html
+
+    def _generate_equipment_spec_html(self, proposal):
+        """Generate HTML for equipment specifications with Image Grid."""
+        html = '<div class="equipment-specs">'
+        service = DataAggregatorService(proposal)
+        specs_data = service._get_equipment_specifications()
+        
+        # We need the equipment list to iterate in order and get names/images
+        data_pkg = service.get_full_data_package()
+        eq_list = data_pkg['equipment_list']
+        
+        for item in eq_list:
+            eq_id = item['equipment_id']
+            name = item['name']
+            images = item['images']
+            
+            # Specs for this item
+            specs = specs_data.get(eq_id, [])
+            
+            html += f'<div class="specs-container" style="page-break-inside: avoid;"><h3>{name}</h3>'
+            
+            # Tech Specs Table
+            if specs:
+                html += '<table><tr><th>Параметр</th><th>Значение</th></tr>'
+                for spec in specs:
+                    html += f"<tr><td>{spec['name']}</td><td>{spec['value']}</td></tr>"
+                html += '</table>'
+            
+            # Images (Auto-insert after table)
+            if images:
+                 html += '<div class="image-grid">'
+                 for img_url in images:
+                     # For PDF export handled by WeasyPrint, absolute URLs or file paths are best.
+                     # img_url is essentially a string from the DB (e.g. http... or just path)
+                     html += f'<div class="image-item"><img src="{img_url}" style="width: 150px; height: auto;"></div>'
+                 html += '</div>'
+            
+            html += '</div>'
+            
+        html += '</div>'
+        return html
+
+    def _generate_tech_process_html(self, proposal):
+        """Generate HTML for tech processes."""
+        html = '<div class="tech-processes">'
+        for eq_list in proposal.equipment_lists.all():
+            for item in eq_list.equipment_items_relation.all():
+                equipment = item.equipment
+                processes = equipment.tech_processes.all()
+                if processes:
+                    html += f"<h3>{equipment.equipment_name} - Технологический процесс</h3>"
+                    for proc in processes:
+                        html += f'<div class="tech-process"><h4>{proc.tech_name}</h4>'
+                        if proc.tech_value:
+                            html += f'<p><strong>Значение:</strong> {proc.tech_value}</p>'
+                        if proc.tech_desc:
+                            html += f'<p>{proc.tech_desc}</p>'
+                        html += '</div>'
+        html += '</div>'
+        return html
+
+    def _generate_photo_grid_html(self, proposal):
+        """Generate HTML for equipment photo grid with 70mm cells."""
+        from .services import DataAggregatorService
+        html = '<div class="photo-grids-container">'
+        service = DataAggregatorService(proposal)
+        data_pkg = service.get_full_data_package()
+        eq_list = data_pkg.get('equipment_list', [])
+        
+        for item in eq_list:
+            images = item.get('images', [])
+            if not images:
+                continue
+            
+            name = item.get('name', 'Оборудование')
+            html += f'''
+            <table class="photo-grid-table">
+                <thead>
+                    <tr>
+                        <th colspan="2" class="equipment-title-cell">{name}</th>
+                    </tr>
+                </thead>
+                <tbody>
+            '''
+            
+            # Chunk images into pairs
+            for i in range(0, len(images), 2):
+                row_images = images[i:i+2]
+                html += '<tr>'
+                for img_data in row_images:
+                    img_url = img_data.get('url', '')
+                    img_name = img_data.get('name', '')
+                    html += f'''
+                        <td class="photo-cell">
+                            <div class="photo-wrapper">
+                                <img src="{img_url}" class="equipment-photo">
+                                {f'<div class="photo-caption">{img_name}</div>' if img_name else ''}
+                            </div>
+                        </td>
+                    '''
+                # Fill empty cell
+                if len(row_images) == 1:
+                    html += '<td class="photo-cell"></td>'
+                html += '</tr>'
+            
+            html += '</tbody></table>'
+        
+        html += '</div>'
+        return html
+
+    def _generate_equipment_table_html(self, proposal):
+        rows = ""
+        
+        # Use DataAggregatorService to get correct data with margin logic
+        service = DataAggregatorService(proposal)
+        data = service.get_full_data_package()
+        equipment_list = data['equipment_list']
+        
+        counter = 1
+        for item in equipment_list:
+            unit_price = item['price_per_unit'] # calculated selling price
+            line_sum = item['total_price']
+            
+            rows += f"""
+            <tr>
+                <td>{counter}</td>
+                <td>{item['name']}</td>
+                <td>{item['quantity']}</td>
+                <td class='text-right'>{unit_price:,.2f} {proposal.currency_ticket}</td>
+                <td class='text-right'>{line_sum:,.2f} {proposal.currency_ticket}</td>
+            </tr>
+            """
+            counter += 1
+            
+        return f"""
+        <table>
+            <thead>
+                <tr>
+                    <th style="width: 30px;">№</th>
+                    <th>Наименование</th>
+                    <th style="width: 50px;">Кол-во</th>
+                    <th class='text-right'>Цена</th>
+                    <th class='text-right'>Сумма</th>
+                </tr>
+            </thead>
+            <tbody>
+                {rows}
+            </tbody>
+        </table>
+        """
+
+    def _generate_additional_services_html(self, proposal):
+        """Generate HTML for additional services table (2 columns)."""
+        rows = ""
+        services = proposal.additional_services or []
+        for service in services:
+            price = service.get('price', 0)
+            rows += f"""
+            <tr>
+                <td>{service.get('description', service.get('name', ''))}</td>
+                <td class='text-right'>{float(price):,.2f} {proposal.currency_ticket}</td>
+            </tr>
+            """
+        
+        if not rows:
+            return ""
+            
+        return f"""
+        <table class="services-table">
+            <thead>
+                <tr>
+                    <th>Описание</th>
+                    <th class='text-right' style="width: 120px;">Стоимость</th>
+                </tr>
+            </thead>
+            <tbody>
+                {rows}
+            </tbody>
+        </table>
+        """
+
+    def _generate_total_price_html(self, proposal):
+        return f"""
+        <div class="total-section">
+            <h3>Итого: {float(proposal.total_price):,.2f} {proposal.currency_ticket}</h3>
+        </div>
+        """
+
+    @action(detail=True, methods=['get'], url_path='export-docx')
+    def export_docx(self, request, pk=None):
+        """Generate DOCX synchronously (fast) or asynchronously based on query param."""
+        template = self.get_object()
+        
+        # Check if async parameter is set (default to sync for DOCX as it's fast)
+        async_mode = request.query_params.get('async', 'false').lower() == 'true'
+        
+        if async_mode:
+            # Asynchronous generation
+            from .tasks import generate_docx_task
+            task = generate_docx_task.delay(template.template_id)
+            return Response({'task_id': task.id}, status=status.HTTP_202_ACCEPTED)
+        else:
+            # Synchronous generation - return DOCX directly (default, fast)
+            try:
+                from .services import ExportService
+                from django.http import HttpResponse
+                from django.conf import settings
+                
+                service = ExportService(template)
+                docx_stream = service.generate_docx()
+                
+                # Return DOCX as response
+                response = HttpResponse(docx_stream.read(), content_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document')
+                safe_number = str(template.proposal.outcoming_number).replace('/', '_').replace(' ', '_')
+                filename = f"proposal_{safe_number}.docx"
+                response['Content-Disposition'] = f'attachment; filename="{filename}"'
+                return response
+                
+            except Exception as e:
+                import logging
+                import traceback
+                logger = logging.getLogger(__name__)
+                logger.error(f"DOCX generation failed for template {template.template_id}: {e}")
+                logger.error(traceback.format_exc())
+                return Response({
+                    'error': str(e),
+                    'traceback': traceback.format_exc() if settings.DEBUG else None
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    def _old_export_docx_logic_placeholder(self, request, pk=None):
+        pass
+        
+        # Load base template
+        template_path = os.path.join(settings.BASE_DIR, 'proposals', 'templates', 'base_proposal.docx')
+        
+        # If template doesn't exist, we can't proceed easily with docxtpl
+        if not os.path.exists(template_path):
+             return HttpResponse("Base template not found", status=404)
+
+        doc = DocxTemplate(template_path)
+        
+        # Helper to process content blocks
+        blocks_data = []
+        if template_obj.layout_data:
+            for block in template_obj.layout_data:
+                title = block.get('title', '')
+                content = block.get('content', '')
+                
+                block_context = {'title': title, 'body': content, 'type': 'text'}
+                
+                if '{equipment_list}' in content:
+                    block_context['type'] = 'equipment_list'
+                    block_context['equipment_list'] = self._get_equipment_list_data(proposal)
+                
+                elif '{total_price_table}' in content:
+                    block_context['type'] = 'total_price'
+                    block_context['total_price_data'] = self._get_total_price_data(proposal)
+                    
+                elif '{equipment_details}' in content:
+                    block_context['type'] = 'equipment_details'
+                    block_context['details'] = self._get_equipment_details_data(proposal)
+
+                elif '{equipment_specs}' in content:
+                    block_context['type'] = 'equipment_spec'
+                    block_context['specs'] = self._get_equipment_spec_data(proposal, doc) 
+
+                elif '{equipment_tech_process}' in content:
+                    block_context['type'] = 'tech_process'
+                    block_context['processes'] = self._get_tech_process_data(proposal)
+                
+                blocks_data.append(block_context)
+        
+        context = {
+            'outcoming_number': proposal.outcoming_number,
+            'client_name': proposal.client.client_name if proposal.client else '',
+            'blocks': blocks_data
+        }
+        
+        doc.render(context)
+        
+        buffer = io.BytesIO()
+        doc.save(buffer)
+        buffer.seek(0)
+        
+        response = HttpResponse(buffer.read(), content_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document')
+        response['Content-Disposition'] = f'attachment; filename="proposal_{proposal.outcoming_number}.docx"'
+        return response
+
+    # --- Data Helpers for DOCX ---
+    def _get_equipment_list_data(self, proposal):
+        items = []
+        counter = 1
+        for eq_list in proposal.equipment_lists.all():
+            for item in eq_list.equipment_items_relation.all():
+                equipment = item.equipment
+                
+                # Use simplified price logic matching PDF generator for consistency
+                # In real world, revisit this to use shared service logic
+                price_obj = equipment.purchase_prices.filter(is_active=True).order_by('-created_at').first()
+                from decimal import Decimal
+                unit_price = Decimal('0')
+                if price_obj:
+                    unit_price = price_obj.price
+                    if price_obj.currency != proposal.currency_ticket and proposal.exchange_rate:
+                         if proposal.currency_ticket == 'KZT' and price_obj.currency != 'KZT':
+                              unit_price = unit_price * proposal.exchange_rate
+                         elif proposal.currency_ticket != 'KZT' and price_obj.currency == 'KZT':
+                              unit_price = unit_price / proposal.exchange_rate
+
+                line_sum = unit_price * item.quantity
+                
+                items.append({
+                    'index': counter,
+                    'name': equipment.equipment_name,
+                    'qty': item.quantity,
+                    'unit': equipment.equipment_uom or 'шт',
+                    'price': f"{float(unit_price):,.2f}".replace(',', ' '),
+                    'total': f"{float(line_sum):,.2f}".replace(',', ' ')
+                })
+                counter += 1
+        return items
+
+    def _get_total_price_data(self, proposal):
+        return {
+            'total_price': f"{float(proposal.total_price):,.2f}".replace(',', ' '),
+            'currency': proposal.currency_ticket
+        }
+
+    def _get_equipment_details_data(self, proposal):
+        data = []
+        for eq_list in proposal.equipment_lists.all():
+            for item in eq_list.equipment_items_relation.all():
+                equipment = item.equipment
+                details = equipment.details.all()
+                if details:
+                   data.append({
+                       'name': equipment.equipment_name,
+                       'params': [{'name': d.detail_parameter_name, 'value': d.detail_parameter_value} for d in details]
+                   })
+        return data
+
+    def _get_equipment_spec_data(self, proposal, doc_template):
+        from docxtpl import InlineImage
+        from docx.shared import Mm
+        import requests
+        import io
+
+        data = []
+        for eq_list in proposal.equipment_lists.all():
+            for item in eq_list.equipment_items_relation.all():
+                equipment = item.equipment
+                specs = equipment.specifications.all()
+                
+                images = []
+                if equipment.equipment_imagelinks:
+                    links = [link.strip() for link in equipment.equipment_imagelinks.split(',') if link.strip()]
+                    for link in links:
+                        try:
+                            # Verify if link is valid URL first
+                            if link.startswith('http'):
+                                response = requests.get(link, timeout=5)
+                                if response.status_code == 200:
+                                    image_stream = io.BytesIO(response.content)
+                                    img = InlineImage(doc_template, image_stream, width=Mm(50))
+                                    images.append(img)
+                        except Exception as e:
+                            print(f"Error loading image {link}: {e}")
+
+                data.append({
+                    'name': equipment.equipment_name,
+                    'params': [{'name': s.spec_parameter_name, 'value': s.spec_parameter_value} for s in specs],
+                    'images': images
+                })
+        return data
+
+    def _get_tech_process_data(self, proposal):
+        data = []
+        for eq_list in proposal.equipment_lists.all():
+            for item in eq_list.equipment_items_relation.all():
+                equipment = item.equipment
+                procs = equipment.tech_processes.all()
+                if procs:
+                    data.append({
+                        'name': equipment.equipment_name,
+                        'items': [{'title': p.tech_name, 'value': p.tech_value, 'desc': p.tech_desc} for p in procs]
+                    })
+        return data
+
+class SectionTemplateViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for SectionTemplate.
+    """
+    queryset = SectionTemplate.objects.all()
+    serializer_class = SectionTemplateSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+class CeleryTaskStatusView(APIView):
+    """
+    Generic endpoint to check Celery task status.
+    GET /api/celery-task-status/{task_id}/
+    """
+    permission_classes = [permissions.IsAuthenticated]
+    
+    def get(self, request, task_id):
+        from celery.result import AsyncResult
+        result = AsyncResult(task_id)
+        response_data = {
+            'task_id': task_id,
+            'status': result.status,
+        }
+        if result.ready():
+            response_data['result'] = result.result
+        
+        return Response(response_data, status=status.HTTP_200_OK)
+
+# Removed CommercialProposalPDFView (now handled by ProposalTemplateViewSet or constructor)
+
+class SystemSettingsLogoView(APIView):
+    """
+    Endpoint for getting and uploading the company logo.
+    GET /api/system-settings/logo/
+    POST /api/system-settings/logo/
+    """
+    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+    
+    def get(self, request, *args, **kwargs):
+        settings = SystemSettings.get_settings()
+        logo_url = settings.company_logo.url if settings.company_logo else "/static/assets/prosnab_logo.png"
+        return Response({'url': logo_url}, status=status.HTTP_200_OK)
+    
+    def post(self, request, *args, **kwargs):
+        if 'file' not in request.FILES:
+            return Response({'error': 'No file provided'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        logo_file = request.FILES['file']
+        settings = SystemSettings.get_settings()
+        
+        # Standardize name as requested: media/company/logo.png
+        # Note: ImageField will handle the save, but we can enforce the name if we want.
+        # However, ImageField usually appends random strings if name exists.
+        # The user specifically asked for media/company/logo.png
+        
+        import os
+        from django.core.files.storage import default_storage
+        from django.core.files.base import ContentFile
+        
+        ext = os.path.splitext(logo_file.name)[1]
+        filename = f"logo{ext}"
+        filepath = os.path.join('company', filename)
+        
+        # Delete old if exists to ensure "replacement"
+        if default_storage.exists(filepath):
+            default_storage.delete(filepath)
+            
+        path = default_storage.save(filepath, ContentFile(logo_file.read()))
+        settings.company_logo = path
+        settings.save()
+        
+        return Response({'url': settings.company_logo.url}, status=status.HTTP_200_OK)
+
+
+class DashboardStatsView(APIView):
+    """
+    Endpoint to get dashboard statistics.
+    
+    GET /api/dashboard/stats/
+    Returns:
+    {
+        "equipment_total": int,
+        "proposals_stats": [
+            {"status": "draft", "label": "Черновик", "count": int},
+            ...
+        ],
+        "active_rates": [
+            {
+                "currency_from": "USD",
+                "rate_value": "450.00",
+                "updated_at": "2026-01-21T10:30:00Z"
+            },
+            ...
+        ]
+    }
+    """
+    permission_classes = [permissions.IsAuthenticated]
+    
+    def get(self, request, *args, **kwargs):
+        # 1. Equipment total count (all equipment, not just published)
+        equipment_total = Equipment.objects.count()
+        
+        # 2. Proposals stats by status (only active proposals)
+        proposals_stats = (
+            CommercialProposal.objects
+            .filter(is_active=True)
+            .values('proposal_status')
+            .annotate(count=Count('proposal_id'))
+            .order_by('proposal_status')
+        )
+        
+        # Map status codes to labels
+        status_labels = {
+            'draft': 'Черновик',
+            'sent': 'Отправлено',
+            'accepted': 'Принято',
+            'rejected': 'Отклонено',
+            'negotiating': 'В переговорах',
+            'completed': 'Завершено',
+        }
+        
+        proposals_stats_list = [
+            {
+                'status': item['proposal_status'],
+                'label': status_labels.get(item['proposal_status'], item['proposal_status']),
+                'count': item['count']
+            }
+            for item in proposals_stats
+        ]
+        
+        # 3. Active exchange rates (latest unique rates from widget)
+        # Get unique currency pairs with latest rates
+        active_rates_qs = ExchangeRate.objects.filter(
+            is_active=True,
+            is_official=True,
+            proposal__isnull=True,
+            currency_to='KZT'
+        ).order_by('currency_from', '-rate_date', '-updated_at', '-created_at')
+        
+        # Deduplicate by currency_from (keep only latest for each currency)
+        seen_currencies = set()
+        active_rates_list = []
+        for rate in active_rates_qs:
+            if rate.currency_from not in seen_currencies:
+                seen_currencies.add(rate.currency_from)
+                active_rates_list.append({
+                    'currency_from': rate.currency_from,
+                    'rate_value': str(rate.rate_value),
+                    'updated_at': rate.updated_at.isoformat() if rate.updated_at else rate.created_at.isoformat()
+                })
+        
+        return Response({
+            'equipment_total': equipment_total,
+            'proposals_stats': proposals_stats_list,
+            'active_rates': active_rates_list
+        }, status=status.HTTP_200_OK)
+
+
+class DashboardActiveProposalsView(APIView):
+    """
+    Endpoint to get active commercial proposals with payment details for dashboard.
+    
+    GET /api/dashboard/active-proposals/?date_from=YYYY-MM-DD&date_to=YYYY-MM-DD
+    Returns:
+    [
+        {
+            "proposal_id": int,
+            "outcoming_number": str,
+            "proposal_name": str,
+            "client": {
+                "client_id": int,
+                "client_name": str,
+                "client_company_name": str
+            },
+            "proposal_status": str,
+            "total_sum": str,  # Total price in KZT
+            "paid_amount": str,  # Sum of all payments in KZT
+            "payment_percentage": float,  # Percentage of paid amount (0-100)
+            "created_at": str
+        },
+        ...
+    ]
+    """
+    permission_classes = [permissions.IsAuthenticated]
+    
+    def get(self, request, *args, **kwargs):
+        from decimal import Decimal
+        
+        # Get date range from query params (default to current month)
+        date_from = request.query_params.get('date_from', None)
+        date_to = request.query_params.get('date_to', None)
+        
+        # If no dates provided, default to current month
+        if not date_from or not date_to:
+            now = timezone.now()
+            # First day of current month
+            date_from = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+            # Last day of current month
+            if now.month == 12:
+                date_to = now.replace(year=now.year + 1, month=1, day=1) - timedelta(days=1)
+            else:
+                date_to = now.replace(month=now.month + 1, day=1) - timedelta(days=1)
+            date_to = date_to.replace(hour=23, minute=59, second=59, microsecond=999999)
+        else:
+            # Parse provided dates
+            try:
+                date_from = datetime.strptime(date_from, '%Y-%m-%d').replace(hour=0, minute=0, second=0, microsecond=0)
+                date_to = datetime.strptime(date_to, '%Y-%m-%d').replace(hour=23, minute=59, second=59, microsecond=999999)
+                # Make timezone-aware
+                if timezone.is_naive(date_from):
+                    date_from = timezone.make_aware(date_from)
+                if timezone.is_naive(date_to):
+                    date_to = timezone.make_aware(date_to)
+            except ValueError:
+                return Response(
+                    {'error': 'Invalid date format. Use YYYY-MM-DD'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        
+        # Get active proposals filtered by created_at date range
+        # Exclude closed/archived proposals (is_active=False or status='completed')
+        queryset = CommercialProposal.objects.filter(
+            is_active=True
+        ).exclude(
+            proposal_status='completed'
+        ).filter(
+            created_at__gte=date_from,
+            created_at__lte=date_to
+        ).select_related(
+            'client'
+        ).prefetch_related(
+            'payment_logs'
+        ).order_by('-created_at')
+        
+        # Status labels mapping
+        status_labels = {
+            'draft': 'Черновик',
+            'sent': 'Отправлено',
+            'accepted': 'Принято',
+            'rejected': 'Отклонено',
+            'negotiating': 'В переговорах',
+            'completed': 'Завершено',
+        }
+        
+        proposals_list = []
+        for proposal in queryset:
+            # Calculate total sum in KZT
+            # If currency is not KZT, convert using exchange_rate
+            total_price = Decimal(str(proposal.total_price))
+            if proposal.currency_ticket != 'KZT':
+                exchange_rate = Decimal(str(proposal.exchange_rate))
+                total_sum_kzt = total_price * exchange_rate
+            else:
+                total_sum_kzt = total_price
+            
+            # Calculate paid amount from payment logs
+            # For ManyToMany with prefetch_related, we can iterate directly
+            paid_amount = Decimal('0')
+            # prefetch_related loads the related objects, so we can iterate without additional query
+            for payment in proposal.payment_logs.all():
+                paid_amount += Decimal(str(payment.payment_value))
+            
+            # Calculate payment percentage
+            if total_sum_kzt > 0:
+                payment_percentage = float((paid_amount / total_sum_kzt) * 100)
+                # Cap at 100%
+                payment_percentage = min(payment_percentage, 100.0)
+            else:
+                payment_percentage = 0.0
+            
+            proposals_list.append({
+                'proposal_id': proposal.proposal_id,
+                'outcoming_number': proposal.outcoming_number,
+                'proposal_name': proposal.proposal_name,
+                'client': {
+                    'client_id': proposal.client.client_id,
+                    'client_name': proposal.client.client_name,
+                    'client_company_name': proposal.client.client_company_name or '',
+                },
+                'proposal_status': proposal.proposal_status,
+                'proposal_status_label': status_labels.get(proposal.proposal_status, proposal.proposal_status),
+                'total_sum': str(total_sum_kzt),
+                'paid_amount': str(paid_amount),
+                'payment_percentage': round(payment_percentage, 2),
+                'created_at': proposal.created_at.isoformat() if proposal.created_at else None,
+            })
+        
+        return Response(proposals_list, status=status.HTTP_200_OK)

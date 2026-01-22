@@ -35,7 +35,7 @@ export interface User {
 export interface AuthResponse {
   message: string
   user: User
-  tokens: {
+  tokens?: {
     access: string
     refresh: string
   }

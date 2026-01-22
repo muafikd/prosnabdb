@@ -15,12 +15,17 @@ export interface CommercialProposal {
     user_id: number
     user_name: string
   }
+  updated_by?: {
+    user_id: number
+    user_name: string
+  }
   currency_ticket: string
   exchange_rate: string
   exchange_rate_date?: string
   total_price: string
   cost_price?: string
   margin_percentage?: string
+  margin_value?: string
   proposal_date: string
   valid_until?: string
   delivery_time?: string
@@ -36,12 +41,18 @@ export interface CommercialProposal {
   comments?: string
   bitrix_lead_link?: string
   payment_logs?: PaymentLog[]
+  additional_services?: {
+    name: string;
+    price: number;
+    description: string;
+  }[]
   equipment_lists?: EquipmentList[]
   created_at: string
   updated_at: string
 }
 
 export interface CommercialProposalCreateData {
+  proposal_id?: number
   proposal_name: string
   outcoming_number: string
   client_id: number
@@ -52,25 +63,50 @@ export interface CommercialProposalCreateData {
   total_price: string
   cost_price?: string
   margin_percentage?: string
+  margin_value?: string
   proposal_date: string
   valid_until?: string
   delivery_time?: string
   warranty?: string
   proposal_status?: 'draft' | 'sent' | 'accepted' | 'rejected' | 'negotiating' | 'completed'
-  proposal_version?: number
+  proposal_version: number
   parent_proposal_id?: number
   comments?: string
   bitrix_lead_link?: string
+  internal_exchange_rates?: any[] // Should define specific type ideally
   payment_log_ids?: number[]
+  additional_price_ids?: number[]
+  additional_services?: {
+    name: string;
+    price: number;
+    description: string;
+  }[]
+  equipment_items?: {
+    equipment_id: number;
+    quantity: number;
+    row_expenses?: any[]; // Using any[] for now or define stricter type if needed
+  }[]
+  equipment_list?: {
+    tax_percentage?: number;
+    tax_price?: number;
+    delivery_percentage?: number;
+    delivery_price?: number;
+  }
 }
 
-export interface CommercialProposalUpdateData extends Partial<CommercialProposalCreateData> {}
+export interface CommercialProposalUpdateData extends Partial<CommercialProposalCreateData> { }
 
 export interface PaymentLog {
   payment_id: number
   payment_name: string
   payment_value: string
   payment_date: string
+  comments?: string
+  user?: {
+    user_id: number
+    user_name: string
+  }
+  user_name?: string
   created_at: string
   updated_at: string
 }
@@ -101,6 +137,7 @@ export interface EquipmentListItem {
   equipment: number
   equipment_name: string
   quantity: number
+  row_expenses?: any[]
   created_at: string
 }
 
@@ -175,11 +212,25 @@ export const proposalsAPI = {
     await apiClient.delete(`/commercial-proposals/${proposalId}/`)
   },
 
-  // Скачать PDF КП
-  async downloadPDF(proposalId: number): Promise<Blob> {
-    const response = await apiClient.get(`/commercial-proposals/${proposalId}/pdf/`, {
-      responseType: 'blob',
-    })
+  // Initiate PDF Generation
+  async initiatePDFGeneration(proposalId: number): Promise<{ task_id: string }> {
+    const response = await apiClient.get(`/commercial-proposals/${proposalId}/pdf/`)
+    return response.data
+  },
+
+  // Check PDF Status
+  async checkPDFStatus(taskId: string): Promise<{ status: string; url?: string; error?: string }> {
+    const response = await apiClient.get(`/commercial-proposals/pdf-status/${taskId}/`)
+    return response.data
+  },
+
+  // Legacy Download (now initiates async, might break if not handled)
+  // async downloadPDF(proposalId: number): Promise<Blob> { ... }
+
+
+  // Копировать КП
+  async copyProposal(proposalId: number): Promise<CommercialProposal> {
+    const response: AxiosResponse<CommercialProposal> = await apiClient.post(`/commercial-proposals/${proposalId}/copy/`)
     return response.data
   },
 }
@@ -255,19 +306,24 @@ export const equipmentListsAPI = {
 
 // API функции для элементов списка оборудования
 export const equipmentListItemsAPI = {
-  async addEquipmentToList(listId: number, equipmentId: number, quantity: number): Promise<EquipmentListItem> {
+  async addEquipmentToList(listId: number, equipmentId: number, quantity: number, row_expenses: any[] = []): Promise<EquipmentListItem> {
     const response: AxiosResponse<EquipmentListItem> = await apiClient.post('/equipment-list-items/', {
       equipment_list: listId,
       equipment: equipmentId,
       quantity,
+      row_expenses,
     })
     return response.data
   },
 
-  async updateEquipmentListItem(listId: number, equipmentId: number, quantity: number): Promise<EquipmentListItem> {
+  async updateEquipmentListItem(listId: number, equipmentId: number, quantity: number, row_expenses?: any[]): Promise<EquipmentListItem> {
+    const data: any = { quantity }
+    if (row_expenses) {
+      data.row_expenses = row_expenses
+    }
     const response: AxiosResponse<EquipmentListItem> = await apiClient.patch(
       `/equipment-list-items/${listId}/${equipmentId}/`,
-      { quantity }
+      data
     )
     return response.data
   },

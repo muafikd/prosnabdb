@@ -149,7 +149,7 @@ const registerRules: FormRules = {
   ],
   password: [
     { required: true, message: 'Пожалуйста, введите пароль', trigger: 'blur' },
-    { min: 6, message: 'Пароль должен содержать минимум 6 символов', trigger: 'blur' },
+    { min: 8, message: 'Пароль должен содержать минимум 8 символов', trigger: 'blur' },
   ],
   password_confirm: [
     { required: true, message: 'Пожалуйста, подтвердите пароль', trigger: 'blur' },
@@ -172,13 +172,37 @@ const handleRegister = async () => {
           password_confirm: registerForm.password_confirm,
         })
 
-        ElMessage.success('Регистрация успешна!')
-        
-        // Перенаправляем на главную страницу
-        router.push('/')
+        ElMessage.success(
+          'Регистрация прошла успешно. Ваша учетная запись скоро активируется вашим руководителем.'
+        )
+
+        // Перенаправляем на страницу логина
+        router.push('/login')
       } catch (error) {
-        // Ошибка уже обработана в store
         console.error('Register error:', error)
+        const data = (error as any)?.response?.data
+        let msg: string
+
+        if (typeof data === 'string') {
+          msg = data
+        } else if (data && typeof data === 'object') {
+          // Собираем ошибки вида {field: ["err1", "err2"], ...}
+          msg = Object.entries(data)
+            .map(([k, v]) => {
+              if (Array.isArray(v)) return `${k}: ${v.join(', ')}`
+              if (typeof v === 'object') return `${k}: ${JSON.stringify(v)}`
+              return `${k}: ${v}`
+            })
+            .join('; ')
+        } else {
+          msg =
+            (error as any)?.response?.data?.detail ||
+            (error as any)?.response?.data?.message ||
+            (error as any)?.message ||
+            'Ошибка регистрации'
+        }
+
+        ElMessage.error(msg)
       }
     } else {
       ElMessage.warning('Пожалуйста, заполните все поля корректно')

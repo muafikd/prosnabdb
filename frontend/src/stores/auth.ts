@@ -50,14 +50,6 @@ export const useAuthStore = defineStore('auth', () => {
 
       const response = await authAPI.register(data)
 
-      // Сохраняем токены в cookies
-      Cookies.set('access_token', response.tokens.access, { expires: 1 })
-      Cookies.set('refresh_token', response.tokens.refresh, { expires: 7 })
-
-      // Сохраняем пользователя
-      user.value = response.user
-      isAuthenticated.value = true
-
       return response
     } catch (err: any) {
       error.value = err.response?.data?.message || err.message || 'Ошибка регистрации'

@@ -1,8 +1,14 @@
-from django.urls import path
+from django.urls import path, include
+from rest_framework.routers import DefaultRouter
 from rest_framework_simplejwt.views import TokenRefreshView
 from . import views
 
 app_name = 'proposals'
+
+# Create router for ViewSets
+router = DefaultRouter()
+router.register(r'proposal-templates', views.ProposalTemplateViewSet, basename='proposaltemplate')
+router.register(r'section-templates', views.SectionTemplateViewSet, basename='sectiontemplate')
 
 urlpatterns = [
     # Authentication endpoints
@@ -13,6 +19,10 @@ urlpatterns = [
     
     # JWT token refresh
     path('auth/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
+
+    # Users (admin-only)
+    path('users/', views.UserListView.as_view(), name='user-list'),
+    path('users/<int:user_id>/', views.UserAdminUpdateView.as_view(), name='user-detail'),
     
     # Client CRUD endpoints
     path('clients/', views.ClientListView.as_view(), name='client-list'),
@@ -89,10 +99,14 @@ urlpatterns = [
     # Commercial Proposal CRUD endpoints
     path('commercial-proposals/', views.CommercialProposalListView.as_view(), name='commercial-proposal-list'),
     path('commercial-proposals/<int:proposal_id>/', views.CommercialProposalDetailView.as_view(), name='commercial-proposal-detail'),
-    path('commercial-proposals/<int:proposal_id>/pdf/', views.CommercialProposalPDFView.as_view(), name='commercial-proposal-pdf'),
+    path('commercial-proposals/<int:proposal_id>/refresh-data-package/', views.CommercialProposalRefreshDataPackageView.as_view(), name='commercial-proposal-refresh-data-package'),
+    path('celery-task-status/<str:task_id>/', views.CeleryTaskStatusView.as_view(), name='celery-task-status'),
+    path('commercial-proposals/<int:proposal_id>/copy/', views.CommercialProposalCopyView.as_view(), name='commercial-proposal-copy'),
     
     # Exchange Rate CRUD endpoints
     path('exchange-rates/', views.ExchangeRateListView.as_view(), name='exchange-rate-list'),
+    path('exchange-rates/sync/', views.ExchangeRateSyncView.as_view(), name='exchange-rate-sync'),
+    path('exchange-rates/add/', views.ExchangeRateAddView.as_view(), name='exchange-rate-add'),
     path('exchange-rates/latest/', views.ExchangeRateGetLatestView.as_view(), name='exchange-rate-latest'),
     path('exchange-rates/<int:rate_id>/', views.ExchangeRateDetailView.as_view(), name='exchange-rate-detail'),
     
@@ -101,5 +115,13 @@ urlpatterns = [
     path('cost-calculations/', views.CostCalculationListView.as_view(), name='cost-calculation-list'),
     path('cost-calculations/<int:calculation_id>/', views.CostCalculationDetailView.as_view(), name='cost-calculation-detail'),
     path('cost-calculations/equipment/<int:equipment_id>/history/', views.CostCalculationEquipmentHistoryView.as_view(), name='cost-calculation-equipment-history'),
+    
+    # Include router URLs for ViewSets (automatically registers all actions)
+    path('', include(router.urls)),
+    path('system-settings/logo/', views.SystemSettingsLogoView.as_view(), name='system-settings-logo'),
+    
+    # Dashboard stats endpoint
+    path('dashboard/stats/', views.DashboardStatsView.as_view(), name='dashboard-stats'),
+    path('dashboard/active-proposals/', views.DashboardActiveProposalsView.as_view(), name='dashboard-active-proposals'),
 ]
 

@@ -42,10 +42,28 @@
               <span>Клиенты</span>
             </template>
           </el-menu-item>
+          <el-menu-item index="/manufacturers" v-if="authStore.isManager">
+            <el-icon><OfficeBuilding /></el-icon>
+            <template #title>
+              <span>Производители</span>
+            </template>
+          </el-menu-item>
           <el-menu-item index="/proposals" v-if="authStore.isManager">
             <el-icon><Document /></el-icon>
             <template #title>
               <span>КП</span>
+            </template>
+          </el-menu-item>
+          <el-menu-item index="/proposal-constructor" v-if="authStore.isAuthenticated">
+            <el-icon><Edit /></el-icon>
+            <template #title>
+              <span>Конструктор КП</span>
+            </template>
+          </el-menu-item>
+          <el-menu-item index="/users" v-if="authStore.isAdmin">
+            <el-icon><User /></el-icon>
+            <template #title>
+              <span>Пользователи</span>
             </template>
           </el-menu-item>
         </el-menu>
@@ -68,6 +86,7 @@
               </div>
             </div>
             <div class="user-menu">
+              <ExchangeRateWidget />
               <el-dropdown @command="handleCommand">
                 <span class="user-info">
                   <el-icon><User /></el-icon>
@@ -109,6 +128,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
+import ExchangeRateWidget from '@/components/ExchangeRateWidget.vue'
 import {
   HomeFilled,
   DataBoard,
@@ -119,6 +139,8 @@ import {
   ArrowDown,
   Fold,
   Expand,
+  OfficeBuilding,
+  Edit,
 } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
 
@@ -140,6 +162,7 @@ const pageTitle = computed(() => {
     '/dashboard': 'Dashboard',
     '/equipment': 'Оборудование',
     '/clients': 'Клиенты',
+    '/manufacturers': 'Производители',
     '/proposals': 'Коммерческие предложения',
   }
   return titles[route.path] || 'Система КП'
@@ -296,6 +319,9 @@ onMounted(async () => {
 
 .user-menu {
   margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
 .user-info {

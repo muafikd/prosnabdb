@@ -97,6 +97,17 @@
         <el-table-column prop="equipment_name" label="Название" sortable min-width="200" />
         <el-table-column prop="equipment_articule" label="Артикул" width="120" />
         <el-table-column prop="equipment_uom" label="Ед. изм." width="100" />
+        <el-table-column label="Актуальная цена (KZT)" width="150" sortable>
+          <template #default="{ row }">
+            <span v-if="row.sale_price_kzt !== null && row.sale_price_kzt !== undefined">
+              {{ formatPrice(row.sale_price_kzt, 'KZT') }}
+            </span>
+            <span v-else-if="row.actual_price !== null && row.actual_price !== undefined">
+              {{ formatPrice(row.actual_price, 'KZT') }}
+            </span>
+            <span v-else style="color: #999;">—</span>
+          </template>
+        </el-table-column>
         <el-table-column label="Категории" width="150">
           <template #default="{ row }">
             <el-tag
@@ -124,7 +135,7 @@
         </el-table-column>
         <el-table-column prop="equipment_manufacture_price" label="Цена" width="120">
           <template #default="{ row }">
-            {{ row.equipment_manufacture_price ? `${row.equipment_manufacture_price} ${row.equipment_price_currency_type || ''}` : '-' }}
+            {{ formatPrice(row.equipment_manufacture_price, row.equipment_price_currency_type) }}
           </template>
         </el-table-column>
         <el-table-column prop="is_published" label="Опубликовано" width="120" sortable>
@@ -168,12 +179,12 @@
             class="equipment-card"
           >
             <div class="card-image">
-              <img
-                v-if="getFirstImage(item.equipment_imagelinks)"
-                :src="getFirstImage(item.equipment_imagelinks)"
-                :alt="item.equipment_name"
-                @error="handleImageError"
-              />
+                <img
+                  v-if="getFirstImage(item.equipment_imagelinks)"
+                  :src="getFirstImage(item.equipment_imagelinks)"
+                  :alt="item.equipment_name"
+                  @error="handleImageError"
+                />
               <div v-else class="no-image">
                 <el-icon :size="48"><Picture /></el-icon>
                 <span>Нет изображения</span>
@@ -217,10 +228,7 @@
                 </div>
                 <div class="card-price" v-if="item.equipment_manufacture_price">
                   <span class="price-value">
-                    {{ item.equipment_manufacture_price }}
-                  </span>
-                  <span class="price-currency">
-                    {{ item.equipment_price_currency_type || 'KZT' }}
+                    {{ formatPrice(item.equipment_manufacture_price, item.equipment_price_currency_type || 'KZT') }}
                   </span>
                 </div>
                 <div class="card-description" v-if="item.equipment_short_description">
@@ -312,36 +320,44 @@
             </el-form-item>
 
             <el-form-item label="Категории" prop="categories">
-              <el-select
-                v-model="formData.categories"
-                multiple
-                filterable
-                allow-create
-                default-first-option
-                placeholder="Выберите категории или создайте новую"
-                style="width: 100%"
-                @create="handleCreateCategory"
-              >
-                <el-option
-                  v-for="cat in categories"
-                  :key="cat.category_id"
-                  :label="cat.category_name"
-                  :value="cat.category_id"
-                  class="select-option-with-delete"
+              <div style="display: flex; gap: 10px; width: 100%">
+                <el-select
+                  v-model="formData.categories"
+                  multiple
+                  filterable
+                  allow-create
+                  default-first-option
+                  placeholder="Выберите категории или создайте новую"
+                  style="flex: 1"
+                  @create="handleCreateCategory"
                 >
-                  <div style="display: flex; align-items: center; justify-content: space-between; width: 100%">
-                    <span style="flex: 1">{{ cat.category_name }}</span>
-                    <el-button
-                      type="danger"
-                      text
-                      size="small"
-                      :icon="Delete"
-                      @click.stop="handleDeleteCategory(cat.category_id)"
-                      style="margin-left: 10px; padding: 0; min-height: auto"
-                    />
-                  </div>
-                </el-option>
-              </el-select>
+                  <el-option
+                    v-for="cat in categories"
+                    :key="cat.category_id"
+                    :label="cat.category_name"
+                    :value="cat.category_id"
+                    class="select-option-with-delete"
+                  >
+                    <div style="display: flex; align-items: center; justify-content: space-between; width: 100%">
+                      <span style="flex: 1">{{ cat.category_name }}</span>
+                      <el-button
+                        type="danger"
+                        text
+                        size="small"
+                        :icon="Delete"
+                        @click.stop="handleDeleteCategory(cat.category_id)"
+                        style="margin-left: 10px; padding: 0; min-height: auto"
+                      />
+                    </div>
+                  </el-option>
+                </el-select>
+                <el-button 
+                  type="primary" 
+                  :icon="Plus" 
+                  @click="handleAddCategoryViaPrompt"
+                  title="Добавить новую категорию"
+                />
+              </div>
             </el-form-item>
 
             <el-form-item label="Производители" prop="manufacturers">
@@ -378,70 +394,195 @@
             </el-form-item>
 
             <el-form-item label="Типы оборудования" prop="equipment_types">
-              <el-select
-                v-model="formData.equipment_types"
-                multiple
-                filterable
-                allow-create
-                default-first-option
-                placeholder="Выберите типы или создайте новый"
-                style="width: 100%"
-                @create="handleCreateEquipmentType"
-              >
-                <el-option
-                  v-for="type in equipmentTypes"
-                  :key="type.type_id"
-                  :label="type.type_name"
-                  :value="type.type_id"
-                  class="select-option-with-delete"
+              <div style="display: flex; gap: 10px; width: 100%">
+                <el-select
+                  v-model="formData.equipment_types"
+                  multiple
+                  filterable
+                  allow-create
+                  default-first-option
+                  placeholder="Выберите типы или создайте новый"
+                  style="flex: 1"
+                  @create="handleCreateEquipmentType"
                 >
-                  <div style="display: flex; align-items: center; justify-content: space-between; width: 100%">
-                    <span style="flex: 1">{{ type.type_name }}</span>
-                    <el-button
-                      type="danger"
-                      text
-                      size="small"
-                      :icon="Delete"
-                      @click.stop="handleDeleteEquipmentType(type.type_id)"
-                      style="margin-left: 10px; padding: 0; min-height: auto"
-                    />
-                  </div>
-                </el-option>
-              </el-select>
+                  <el-option
+                    v-for="type in equipmentTypes"
+                    :key="type.type_id"
+                    :label="type.type_name"
+                    :value="type.type_id"
+                    class="select-option-with-delete"
+                  >
+                    <div style="display: flex; align-items: center; justify-content: space-between; width: 100%">
+                      <span style="flex: 1">{{ type.type_name }}</span>
+                      <el-button
+                        type="danger"
+                        text
+                        size="small"
+                        :icon="Delete"
+                        @click.stop="handleDeleteEquipmentType(type.type_id)"
+                        style="margin-left: 10px; padding: 0; min-height: auto"
+                      />
+                    </div>
+                  </el-option>
+                </el-select>
+                <el-button 
+                  type="primary" 
+                  :icon="Plus" 
+                  @click="handleAddEquipmentTypeViaPrompt"
+                  title="Добавить новый тип оборудования"
+                />
+              </div>
             </el-form-item>
           </el-form>
         </el-tab-pane>
 
-        <!-- Цена и производство -->
-        <el-tab-pane label="Цена и производство" name="price">
+        <!-- Цена -->
+        <el-tab-pane label="Цена" name="price">
           <el-form
             :model="formData"
             label-width="200px"
             label-position="left"
           >
-            <el-form-item label="Цена производства">
+            <el-form-item label="Цена продажи (KZT)">
+              <el-input-number
+                v-model="formData.sale_price_kzt"
+                :precision="2"
+                :min="0"
+                style="width: 100%"
+                :formatter="inputFormatter"
+                :parser="inputParser"
+                placeholder="Фиксированная цена продажи в тенге"
+              />
+            </el-form-item>
+
+            <el-form-item label="Цена в Валюте">
               <el-input-number
                 v-model="formData.equipment_manufacture_price"
                 :precision="2"
                 :min="0"
                 style="width: 100%"
+                :formatter="inputFormatter"
+                :parser="inputParser"
               />
             </el-form-item>
 
             <el-form-item label="Валюта">
-              <el-select v-model="formData.equipment_price_currency_type" placeholder="Выберите валюту" style="width: 100%">
-                <el-option label="KZT" value="KZT" />
-                <el-option label="USD" value="USD" />
-                <el-option label="EUR" value="EUR" />
-                <el-option label="RUB" value="RUB" />
-                <el-option label="CNY" value="CNY" />
+              <el-select 
+                v-model="formData.equipment_price_currency_type" 
+                placeholder="Выберите валюту или введите новый тикер" 
+                style="width: 100%"
+                filterable
+                allow-create
+                default-first-option
+                @change="handleCurrencyChange"
+              >
+                <el-option 
+                  v-for="currency in availableCurrencies" 
+                  :key="currency" 
+                  :label="currency" 
+                  :value="currency" 
+                />
               </el-select>
             </el-form-item>
 
             <el-form-item label="Страна производства">
-              <el-input v-model="formData.equipment_madein_country" placeholder="Введите страну" />
+              <el-select 
+                v-model="formData.equipment_madein_country" 
+                placeholder="Выберите страну или введите новую" 
+                style="width: 100%"
+                filterable
+                allow-create
+                default-first-option
+              >
+                <el-option 
+                  v-for="country in availableCountries" 
+                  :key="country" 
+                  :label="country" 
+                  :value="country" 
+                />
+              </el-select>
             </el-form-item>
           </el-form>
+        </el-tab-pane>
+
+        <!-- Документы -->
+        <el-tab-pane label="Документы" name="documents">
+          <div class="dynamic-list">
+            <div class="list-header">
+              <h3>Документы оборудования</h3>
+              <el-button type="primary" size="small" @click="openDocumentModal()">
+                <el-icon><Plus /></el-icon>
+                Добавить документ
+              </el-button>
+            </div>
+            <el-table :data="localDocuments" border style="width: 100%">
+              <el-table-column prop="document_type" label="Тип документа" width="150">
+                <template #default="{ row }">
+                  {{ getDocumentTypeLabel(row.document_type) }}
+                </template>
+              </el-table-column>
+              <el-table-column prop="document_name" label="Название" min-width="200" />
+              <el-table-column label="Файл/Ссылка" min-width="250">
+                <template #default="{ row }">
+                  <div v-if="row.file_url" style="display: flex; align-items: center; gap: 8px;">
+                    <el-link :href="row.file_url" target="_blank" type="primary">
+                      <el-icon><Link /></el-icon>
+                      Открыть ссылку
+                    </el-link>
+                  </div>
+                  <div v-else-if="row.file" style="display: flex; align-items: center; gap: 8px;">
+                    <el-link :href="getFileUrl(row.file)" target="_blank" type="primary">
+                      <el-icon><Document /></el-icon>
+                      Открыть файл
+                    </el-link>
+                    <span v-if="row.file_size" style="color: #909399; font-size: 12px;">
+                      ({{ formatFileSize(row.file_size) }})
+                    </span>
+                  </div>
+                  <span v-else style="color: #909399;">—</span>
+                </template>
+              </el-table-column>
+              <el-table-column prop="is_for_client" label="Для клиента" width="120" align="center">
+                <template #default="{ row }">
+                  <el-tag :type="row.is_for_client ? 'success' : 'info'" size="small">
+                    {{ row.is_for_client ? 'Да' : 'Нет' }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column prop="is_internal" label="Внутренний" width="120" align="center">
+                <template #default="{ row }">
+                  <el-tag :type="row.is_internal ? 'warning' : 'info'" size="small">
+                    {{ row.is_internal ? 'Да' : 'Нет' }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column prop="created_at" label="Дата создания" width="180">
+                <template #default="{ row }">
+                  {{ formatDate(row.created_at) }}
+                </template>
+              </el-table-column>
+              <el-table-column label="Действия" width="120" align="center">
+                <template #default="{ row, $index }">
+                  <div style="display: flex; gap: 5px; justify-content: center">
+                    <el-button
+                      type="primary"
+                      :icon="Edit"
+                      circle
+                      size="small"
+                      @click="openDocumentModal($index)"
+                    />
+                    <el-button
+                      type="danger"
+                      :icon="Delete"
+                      circle
+                      size="small"
+                      @click="handleDeleteDocument(row.document_id)"
+                    />
+                  </div>
+                </template>
+              </el-table-column>
+            </el-table>
+          </div>
         </el-tab-pane>
 
         <!-- Медиа -->
@@ -452,12 +593,38 @@
             label-position="left"
           >
             <el-form-item label="Ссылки на изображения">
-              <el-input
-                v-model="formData.equipment_imagelinks"
-                type="textarea"
-                :rows="4"
-                placeholder="Введите ссылки на изображения (каждая с новой строки)"
-              />
+              <div style="width: 100%">
+                <div style="display: flex; justify-content: flex-end; margin-bottom: 10px">
+                  <el-button type="primary" @click="openAddImageModal()">
+                    + Добавить изображение
+                  </el-button>
+                </div>
+                
+                <el-table :data="formData.equipment_imagelinks || []" border style="width: 100%">
+                  <el-table-column prop="name" label="Название" min-width="150" />
+                  <el-table-column prop="url" label="Ссылка" min-width="250" show-overflow-tooltip />
+                  <el-table-column label="Действия" width="120" align="center">
+                    <template #default="{ $index }">
+                      <div style="display: flex; gap: 5px; justify-content: center">
+                        <el-button
+                          type="primary"
+                          :icon="Edit"
+                          circle
+                          size="small"
+                          @click="openAddImageModal($index)"
+                        />
+                        <el-button
+                          type="danger"
+                          :icon="Delete"
+                          circle
+                          size="small"
+                          @click="handleDeleteImage($index)"
+                        />
+                      </div>
+                    </template>
+                  </el-table-column>
+                </el-table>
+              </div>
             </el-form-item>
 
             <el-form-item label="Ссылки на видео">
@@ -654,6 +821,8 @@
                     :min="0"
                     style="width: 100%"
                     placeholder="Стоимость"
+                    :formatter="inputFormatter"
+                    :parser="inputParser"
                   />
                 </template>
               </el-table-column>
@@ -709,13 +878,82 @@
         </span>
       </template>
     </el-dialog>
+    <!-- Диалог для добавления/редактирования ссылки на фото -->
+    <el-dialog
+      v-model="imageModalVisible"
+      :title="currentImageForm.index >= 0 ? 'Редактировать изображение' : 'Добавить изображение'"
+      width="500px"
+      append-to-body
+    >
+      <el-form :model="currentImageForm" label-width="100px">
+        <el-form-item label="Название">
+          <el-input v-model="currentImageForm.name" placeholder="Например: Вид сверху" />
+        </el-form-item>
+        <el-form-item label="Ссылка" required>
+          <el-input v-model="currentImageForm.url" placeholder="https://..." />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="imageModalVisible = false">Отмена</el-button>
+        <el-button type="primary" @click="handleSaveLink">Сохранить</el-button>
+      </template>
+    </el-dialog>
+    <!-- Диалог для добавления/редактирования документа -->
+    <el-dialog
+      v-model="documentModalVisible"
+      :title="currentDocumentForm.index >= 0 ? 'Редактировать документ' : 'Добавить документ'"
+      width="600px"
+      append-to-body
+    >
+      <el-form :model="currentDocumentForm" label-width="150px" ref="documentFormRef">
+        <el-form-item label="Тип документа" required>
+          <el-select v-model="currentDocumentForm.document_type" placeholder="Выберите тип" style="width: 100%">
+            <el-option label="Паспорт" value="passport" />
+            <el-option label="Сертификат" value="certificate" />
+            <el-option label="Декларация" value="declaration" />
+            <el-option label="Смета" value="estimate" />
+            <el-option label="Инструкция" value="manual" />
+            <el-option label="Прочее" value="other" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="Название документа" required>
+          <el-input v-model="currentDocumentForm.document_name" placeholder="Введите название документа" />
+        </el-form-item>
+        <el-form-item label="Загрузить файл">
+          <el-upload
+            :auto-upload="false"
+            :on-change="handleFileChange"
+            :file-list="currentDocumentForm.file ? [{ name: currentDocumentForm.file.name }] : []"
+            :limit="1"
+          >
+            <el-button type="primary">Выбрать файл</el-button>
+            <template #tip>
+              <div class="el-upload__tip">Максимум 1 файл</div>
+            </template>
+          </el-upload>
+        </el-form-item>
+        <el-form-item label="Или ссылка на файл">
+          <el-input v-model="currentDocumentForm.file_url" placeholder="https://..." />
+        </el-form-item>
+        <el-form-item label="Для клиента">
+          <el-switch v-model="currentDocumentForm.is_for_client" />
+        </el-form-item>
+        <el-form-item label="Внутренний документ">
+          <el-switch v-model="currentDocumentForm.is_internal" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="documentModalVisible = false">Отмена</el-button>
+        <el-button type="primary" @click="handleSaveDocument" :loading="submitting">Сохранить</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, reactive, onMounted, computed } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
-import { Plus, Edit, Delete, Search, List, Grid, Picture } from '@element-plus/icons-vue'
+import { Plus, Edit, Delete, Search, List, Grid, Picture, Link, Document } from '@element-plus/icons-vue'
 import {
   equipmentAPI,
   categoriesAPI,
@@ -734,8 +972,14 @@ import {
   type EquipmentSpecification,
   type EquipmentTechProcess,
   type Logistics,
+  type EquipmentImage,
+  type EquipmentDocument,
+  equipmentDocumentsAPI
 } from '@/api/equipment'
 import { format } from 'date-fns'
+import { formatPrice, inputFormatter, inputParser } from '@/utils/formatters'
+import { useExchangeRateStore } from '@/stores/exchangeRate'
+import { exchangeRatesAPI } from '@/api/exchangeRates'
 
 // State
 const loading = ref(false)
@@ -755,6 +999,44 @@ const activeTab = ref('basic')
 const formRef = ref<FormInstance>()
 const viewMode = ref<'table' | 'grid'>('table')
 
+// Exchange rate store
+const exchangeRateStore = useExchangeRateStore()
+
+// Popular countries list
+const popularCountries = [
+  'Казахстан', 'Россия', 'Китай', 'Германия', 'Италия', 'Турция', 
+  'США', 'Япония', 'Южная Корея', 'Франция', 'Великобритания', 
+  'Польша', 'Чехия', 'Словакия', 'Беларусь', 'Украина', 'Индия',
+  'Тайвань', 'Сингапур', 'Малайзия', 'Таиланд', 'Вьетнам'
+]
+
+// Available currencies from exchange rates
+const availableCurrencies = computed(() => {
+  const currencies = new Set<string>(['KZT', 'USD', 'EUR', 'RUB', 'CNY'])
+  // Add currencies from exchange rates
+  exchangeRateStore.rates.forEach(rate => {
+    if (rate.currency_from) currencies.add(rate.currency_from)
+    if (rate.currency_to) currencies.add(rate.currency_to)
+  })
+  return Array.from(currencies).sort()
+})
+
+// Available countries (popular + unique from existing equipment + current form value)
+const availableCountries = computed(() => {
+  const countries = new Set<string>(popularCountries)
+  // Add countries from existing equipment
+  equipmentList.value.forEach(eq => {
+    if (eq.equipment_madein_country) {
+      countries.add(eq.equipment_madein_country)
+    }
+  })
+  // Add current form value if it exists (for editing)
+  if (formData.equipment_madein_country) {
+    countries.add(formData.equipment_madein_country)
+  }
+  return Array.from(countries).sort()
+})
+
 const filters = reactive({
   category: null as number | null,
   manufacturer: null as number | null,
@@ -765,10 +1047,261 @@ const filters = reactive({
 const localDetails = ref<(EquipmentDetail & { isNew?: boolean })[]>([])
 const localSpecifications = ref<(EquipmentSpecification & { isNew?: boolean })[]>([])
 const localTechProcesses = ref<(EquipmentTechProcess & { isNew?: boolean })[]>([])
-const localLogistics = ref<(Logistics & { isNew?: boolean; cost?: number })[]>([])
+const localLogistics = ref<(Omit<Logistics, 'cost'> & { cost: number; isNew?: boolean })[]>([])
+const localDocuments = ref<EquipmentDocument[]>([])
+
+// State for image link modal
+const imageModalVisible = ref(false)
+const currentImageForm = reactive({
+  name: '',
+  url: '',
+  index: -1
+})
+
+// State for document modal
+const documentModalVisible = ref(false)
+const documentFormRef = ref<FormInstance>()
+const currentDocumentForm = reactive<{
+  index: number
+  document_type: 'passport' | 'certificate' | 'declaration' | 'estimate' | 'manual' | 'other'
+  document_name: string
+  file: File | null
+  file_url: string
+  is_for_client: boolean
+  is_internal: boolean
+}>({
+  index: -1,
+  document_type: 'other',
+  document_name: '',
+  file: null,
+  file_url: '',
+  is_for_client: false,
+  is_internal: false
+})
+
+const openAddImageModal = (index = -1) => {
+  if (index >= 0) {
+    const link = (formData.equipment_imagelinks as EquipmentImage[])?.[index]
+    if (link) {
+      currentImageForm.name = link.name
+      currentImageForm.url = link.url
+      currentImageForm.index = index
+    }
+  } else {
+    currentImageForm.name = ''
+    currentImageForm.url = ''
+    currentImageForm.index = -1
+  }
+  imageModalVisible.value = true
+}
+
+const syncImagesWithBackend = async () => {
+  if (!currentEquipmentId.value) return
+  
+  try {
+    const images = (formData.equipment_imagelinks as EquipmentImage[]).filter(l => l && l.url && l.url.trim())
+    await equipmentAPI.updateEquipment(currentEquipmentId.value, {
+      equipment_imagelinks: images
+    })
+    ElMessage.success('Медиафайлы синхронизированы')
+  } catch (error) {
+    console.error('Failed to sync images:', error)
+    ElMessage.error('Ошибка синхронизации медиафайлов')
+  }
+}
+
+const handleSaveLink = async () => {
+  if (!currentImageForm.url) {
+    ElMessage.warning('Пожалуйста, введите ссылку')
+    return
+  }
+  
+  if (!currentImageForm.name) {
+    ElMessage.warning('Пожалуйста, введите название изображения')
+    return
+  }
+  
+  const newLink: EquipmentImage = { name: currentImageForm.name, url: currentImageForm.url }
+  
+  if (!Array.isArray(formData.equipment_imagelinks)) {
+    formData.equipment_imagelinks = []
+  }
+  
+  if (currentImageForm.index >= 0) {
+    (formData.equipment_imagelinks as EquipmentImage[])[currentImageForm.index] = newLink
+  } else {
+    (formData.equipment_imagelinks as EquipmentImage[]).push(newLink)
+  }
+  
+  imageModalVisible.value = false
+  
+  // Auto-sync if editing
+  await syncImagesWithBackend()
+}
+
+const handleDeleteImage = async (index: number) => {
+  try {
+    await ElMessageBox.confirm('Вы уверены, что хотите удалить это изображение?', 'Подтверждение', {
+      confirmButtonText: 'Удалить',
+      cancelButtonText: 'Отмена',
+      type: 'warning'
+    })
+    
+    if (Array.isArray(formData.equipment_imagelinks)) {
+      (formData.equipment_imagelinks as EquipmentImage[]).splice(index, 1)
+      await syncImagesWithBackend()
+    }
+  } catch (error) {
+    // User cancelled
+  }
+}
+
+// Document functions
+const openDocumentModal = (index = -1) => {
+  if (index >= 0 && localDocuments.value[index]) {
+    const doc = localDocuments.value[index]
+    currentDocumentForm.index = index
+    currentDocumentForm.document_type = doc.document_type
+    currentDocumentForm.document_name = doc.document_name
+    currentDocumentForm.file = null
+    currentDocumentForm.file_url = doc.file_url || ''
+    currentDocumentForm.is_for_client = doc.is_for_client
+    currentDocumentForm.is_internal = doc.is_internal
+  } else {
+    currentDocumentForm.index = -1
+    currentDocumentForm.document_type = 'other'
+    currentDocumentForm.document_name = ''
+    currentDocumentForm.file = null
+    currentDocumentForm.file_url = ''
+    currentDocumentForm.is_for_client = false
+    currentDocumentForm.is_internal = false
+  }
+  documentModalVisible.value = true
+}
+
+const handleFileChange = (file: any) => {
+  currentDocumentForm.file = file.raw
+}
+
+const handleSaveDocument = async () => {
+  if (!currentDocumentForm.document_name.trim()) {
+    ElMessage.warning('Пожалуйста, введите название документа')
+    return
+  }
+  
+  if (!currentDocumentForm.file && !currentDocumentForm.file_url?.trim()) {
+    ElMessage.warning('Пожалуйста, загрузите файл или укажите ссылку')
+    return
+  }
+  
+  if (!currentEquipmentId.value) {
+    ElMessage.error('Оборудование не выбрано')
+    return
+  }
+  
+  try {
+    submitting.value = true
+    
+    if (currentDocumentForm.index >= 0) {
+      // Редактирование существующего документа
+      const doc = localDocuments.value[currentDocumentForm.index]
+      await equipmentDocumentsAPI.updateDocument(doc.document_id, {
+        document_type: currentDocumentForm.document_type,
+        document_name: currentDocumentForm.document_name,
+        file: currentDocumentForm.file,
+        file_url: currentDocumentForm.file_url || null,
+        is_for_client: currentDocumentForm.is_for_client,
+        is_internal: currentDocumentForm.is_internal
+      })
+      ElMessage.success('Документ успешно обновлен')
+    } else {
+      // Создание нового документа
+      await equipmentDocumentsAPI.createDocument({
+        equipment: currentEquipmentId.value,
+        document_type: currentDocumentForm.document_type,
+        document_name: currentDocumentForm.document_name,
+        file: currentDocumentForm.file,
+        file_url: currentDocumentForm.file_url || null,
+        is_for_client: currentDocumentForm.is_for_client,
+        is_internal: currentDocumentForm.is_internal
+      })
+      ElMessage.success('Документ успешно создан')
+    }
+    
+    // Обновляем список документов
+    if (currentEquipmentId.value) {
+      const documentsData = await equipmentDocumentsAPI.getDocumentsByEquipment(currentEquipmentId.value)
+      localDocuments.value = documentsData
+    }
+    
+    documentModalVisible.value = false
+  } catch (error: any) {
+    console.error('Save document error:', error)
+    ElMessage.error(error.response?.data?.message || 'Ошибка сохранения документа')
+  } finally {
+    submitting.value = false
+  }
+}
+
+const handleDeleteDocument = async (documentId: number) => {
+  try {
+    await ElMessageBox.confirm('Вы уверены, что хотите удалить этот документ?', 'Подтверждение', {
+      confirmButtonText: 'Удалить',
+      cancelButtonText: 'Отмена',
+      type: 'warning'
+    })
+    
+    await equipmentDocumentsAPI.deleteDocument(documentId)
+    ElMessage.success('Документ успешно удален')
+    
+    // Обновляем список документов
+    if (currentEquipmentId.value) {
+      const documentsData = await equipmentDocumentsAPI.getDocumentsByEquipment(currentEquipmentId.value)
+      localDocuments.value = documentsData
+    }
+  } catch (error: any) {
+    if (error !== 'cancel') {
+      console.error('Delete document error:', error)
+      ElMessage.error(error.response?.data?.message || 'Ошибка удаления документа')
+    }
+  }
+}
+
+const getDocumentTypeLabel = (type: string) => {
+  const labels: Record<string, string> = {
+    passport: 'Паспорт',
+    certificate: 'Сертификат',
+    declaration: 'Декларация',
+    estimate: 'Смета',
+    manual: 'Инструкция',
+    other: 'Прочее'
+  }
+  return labels[type] || type
+}
+
+const formatFileSize = (bytes: number | null | undefined) => {
+  if (!bytes) return '—'
+  const sizes = ['Б', 'КБ', 'МБ', 'ГБ']
+  if (bytes === 0) return '0 Б'
+  const i = Math.floor(Math.log(bytes) / Math.log(1024))
+  return Math.round(bytes / Math.pow(1024, i) * 100) / 100 + ' ' + sizes[i]
+}
+
+const getFileUrl = (filePath: string) => {
+  if (!filePath) return ''
+  if (filePath.startsWith('http://') || filePath.startsWith('https://')) {
+    return filePath
+  }
+  // Предполагаем, что файлы хранятся в /media/
+  // Если путь начинается с /media/, используем его напрямую, иначе добавляем /media/
+  if (filePath.startsWith('/media/')) {
+    return filePath
+  }
+  return `/media/${filePath.startsWith('/') ? filePath.slice(1) : filePath}`
+}
 
 // Form data
-const formData = reactive<EquipmentCreateData & { equipment_manufacture_price?: number | string }>({
+const formData = reactive<EquipmentCreateData & { equipment_manufacture_price?: number | string; sale_price_kzt?: number | string }>({
   equipment_name: '',
   equipment_articule: '',
   equipment_uom: '',
@@ -778,9 +1311,10 @@ const formData = reactive<EquipmentCreateData & { equipment_manufacture_price?: 
   categories: [],
   manufacturers: [],
   equipment_types: [],
-  equipment_imagelinks: '',
+  equipment_imagelinks: [],
   equipment_videolinks: '',
   equipment_manufacture_price: undefined,
+  sale_price_kzt: undefined,
   equipment_madein_country: '',
   equipment_price_currency_type: '',
 })
@@ -908,12 +1442,23 @@ const handleEdit = async (equipment: Equipment) => {
       categories: equipmentData.categories || [],
       manufacturers: equipmentData.manufacturers || [],
       equipment_types: equipmentData.equipment_types || [],
-      equipment_imagelinks: equipmentData.equipment_imagelinks || '',
+      equipment_imagelinks: Array.isArray(equipmentData.equipment_imagelinks) 
+        ? (equipmentData.equipment_imagelinks as any[]).map(img => 
+            typeof img === 'string' 
+              ? { name: 'Изображение', url: img } 
+              : { ...img, name: img.name || 'Изображение' }
+          ) 
+        : [],
       equipment_videolinks: equipmentData.equipment_videolinks || '',
       equipment_manufacture_price: equipmentData.equipment_manufacture_price 
         ? (typeof equipmentData.equipment_manufacture_price === 'string' 
             ? parseFloat(equipmentData.equipment_manufacture_price) 
             : parseFloat(String(equipmentData.equipment_manufacture_price)))
+        : undefined,
+      sale_price_kzt: equipmentData.sale_price_kzt 
+        ? (typeof equipmentData.sale_price_kzt === 'string' 
+            ? parseFloat(equipmentData.sale_price_kzt) 
+            : parseFloat(String(equipmentData.sale_price_kzt)))
         : undefined,
       equipment_madein_country: equipmentData.equipment_madein_country || '',
       equipment_price_currency_type: equipmentData.equipment_price_currency_type || '',
@@ -935,6 +1480,15 @@ const handleEdit = async (equipment: Equipment) => {
     } catch (error) {
       console.error('Load logistics error:', error)
       localLogistics.value = []
+    }
+    
+    // Загружаем документы
+    try {
+      const documentsData = await equipmentDocumentsAPI.getDocumentsByEquipment(equipment.equipment_id)
+      localDocuments.value = documentsData
+    } catch (error) {
+      console.error('Load documents error:', error)
+      localDocuments.value = []
     }
     
     dialogVisible.value = true
@@ -1007,7 +1561,7 @@ const handleSubmit = async () => {
         // Обрабатываем массивы: создаем элементы, если там есть строки, и фильтруем только числа
         if (formData.categories && formData.categories.length > 0) {
           const categoryIds: number[] = []
-          for (const item of formData.categories) {
+          for (const item of (formData.categories as any[])) {
             if (typeof item === 'number') {
               categoryIds.push(item)
             } else if (typeof item === 'string' && item.trim()) {
@@ -1030,7 +1584,7 @@ const handleSubmit = async () => {
         
         if (formData.manufacturers && formData.manufacturers.length > 0) {
           const manufacturerIds: number[] = []
-          for (const item of formData.manufacturers) {
+          for (const item of (formData.manufacturers as any[])) {
             if (typeof item === 'number') {
               manufacturerIds.push(item)
             } else if (typeof item === 'string' && item.trim()) {
@@ -1053,7 +1607,7 @@ const handleSubmit = async () => {
         
         if (formData.equipment_types && formData.equipment_types.length > 0) {
           const typeIds: number[] = []
-          for (const item of formData.equipment_types) {
+          for (const item of (formData.equipment_types as any[])) {
             if (typeof item === 'number') {
               typeIds.push(item)
             } else if (typeof item === 'string' && item.trim()) {
@@ -1075,8 +1629,8 @@ const handleSubmit = async () => {
         }
         
         // Медиа
-        if (formData.equipment_imagelinks?.trim()) {
-          submitData.equipment_imagelinks = formData.equipment_imagelinks.trim()
+        if (formData.equipment_imagelinks && formData.equipment_imagelinks.length > 0) {
+          submitData.equipment_imagelinks = (formData.equipment_imagelinks as any[]).filter(l => l && l.url && l.url.trim())
         }
         if (formData.equipment_videolinks?.trim()) {
           submitData.equipment_videolinks = formData.equipment_videolinks.trim()
@@ -1089,6 +1643,16 @@ const handleSubmit = async () => {
             : parseFloat(String(formData.equipment_manufacture_price))
           if (!isNaN(priceValue) && priceValue > 0) {
             submitData.equipment_manufacture_price = String(priceValue)
+          }
+        }
+        
+        // Цена продажи (KZT)
+        if (formData.sale_price_kzt !== undefined && formData.sale_price_kzt !== null && formData.sale_price_kzt !== '') {
+          const salePriceValue = typeof formData.sale_price_kzt === 'number' 
+            ? formData.sale_price_kzt 
+            : parseFloat(String(formData.sale_price_kzt))
+          if (!isNaN(salePriceValue) && salePriceValue > 0) {
+            submitData.sale_price_kzt = String(salePriceValue)
           }
         }
         
@@ -1166,7 +1730,7 @@ const addDetail = () => {
 
 const removeDetail = async (index: number) => {
   const detail = localDetails.value[index]
-  if (detail.detail_id && !detail.isNew) {
+  if (detail && detail.detail_id && !detail.isNew) {
     try {
       await equipmentDetailsAPI.deleteDetail(detail.detail_id)
       ElMessage.success('Деталь удалена')
@@ -1214,7 +1778,7 @@ const addSpecification = () => {
 
 const removeSpecification = async (index: number) => {
   const spec = localSpecifications.value[index]
-  if (spec.spec_id && !spec.isNew) {
+  if (spec && spec.spec_id && !spec.isNew) {
     try {
       await equipmentSpecificationsAPI.deleteSpecification(spec.spec_id)
       ElMessage.success('Спецификация удалена')
@@ -1261,7 +1825,7 @@ const addTechProcess = () => {
 
 const removeTechProcess = async (index: number) => {
   const tech = localTechProcesses.value[index]
-  if (tech.tech_id && !tech.isNew) {
+  if (tech && tech.tech_id && !tech.isNew) {
     try {
       await equipmentTechProcessesAPI.deleteTechProcess(tech.tech_id)
       ElMessage.success('Техпроцесс удален')
@@ -1316,7 +1880,7 @@ const addLogistics = () => {
 
 const removeLogistics = async (index: number) => {
   const logistics = localLogistics.value[index]
-  if (logistics.logistics_id && !logistics.isNew) {
+  if (logistics && logistics.logistics_id && !logistics.isNew) {
     try {
       await logisticsAPI.deleteLogistics(logistics.logistics_id)
       ElMessage.success('Логистика удалена')
@@ -1366,6 +1930,7 @@ const handleDialogClose = () => {
   localSpecifications.value = []
   localTechProcesses.value = []
   localLogistics.value = []
+  localDocuments.value = []
 }
 
 const resetForm = () => {
@@ -1379,7 +1944,7 @@ const resetForm = () => {
     categories: [],
     manufacturers: [],
     equipment_types: [],
-    equipment_imagelinks: '',
+    equipment_imagelinks: [],
     equipment_videolinks: '',
     equipment_manufacture_price: undefined,
     equipment_madein_country: '',
@@ -1389,9 +1954,42 @@ const resetForm = () => {
   localSpecifications.value = []
   localTechProcesses.value = []
   localLogistics.value = []
+  localDocuments.value = []
 }
 
 // Обработчики для создания и удаления категорий, производителей и типов
+
+const handleAddCategoryViaPrompt = async () => {
+  try {
+    const { value } = await ElMessageBox.prompt('Введите название новой категории', 'Новая категория', {
+      confirmButtonText: 'Создать',
+      cancelButtonText: 'Отмена',
+      inputPattern: /^.+$/,
+      inputErrorMessage: 'Название не может быть пустым'
+    })
+
+    if (value) {
+      const newCategory = await categoriesAPI.createCategory({
+        category_name: value.trim(),
+      })
+      categories.value.push(newCategory)
+      
+      // Добавляем ID созданной категории в выбор
+      if (!formData.categories) {
+        formData.categories = []
+      }
+      formData.categories.push(newCategory.category_id)
+      
+      ElMessage.success(`Категория "${newCategory.category_name}" успешно создана`)
+    }
+  } catch (error: any) {
+    if (error !== 'cancel') {
+      ElMessage.error(error.response?.data?.message || 'Ошибка создания категории')
+      console.error('Create category error:', error)
+    }
+  }
+}
+
 const handleCreateCategory = async (newCategoryName: string) => {
   try {
     const newCategory = await categoriesAPI.createCategory({
@@ -1504,6 +2102,37 @@ const handleDeleteManufacturer = async (manufacturerId: number) => {
   }
 }
 
+const handleAddEquipmentTypeViaPrompt = async () => {
+  try {
+    const { value } = await ElMessageBox.prompt('Введите название нового типа оборудования', 'Новый тип оборудования', {
+      confirmButtonText: 'Создать',
+      cancelButtonText: 'Отмена',
+      inputPattern: /^.+$/,
+      inputErrorMessage: 'Название не может быть пустым'
+    })
+
+    if (value) {
+      const newType = await equipmentTypesAPI.createEquipmentType({
+        type_name: value.trim(),
+      })
+      equipmentTypes.value.push(newType)
+      
+      // Добавляем ID созданного типа в выбор
+      if (!formData.equipment_types) {
+        formData.equipment_types = []
+      }
+      formData.equipment_types.push(newType.type_id)
+      
+      ElMessage.success(`Тип оборудования "${newType.type_name}" успешно создан`)
+    }
+  } catch (error: any) {
+    if (error !== 'cancel') {
+      ElMessage.error(error.response?.data?.message || 'Ошибка создания типа оборудования')
+      console.error('Create equipment type error:', error)
+    }
+  }
+}
+
 const handleCreateEquipmentType = async (newTypeName: string) => {
   try {
     const newType = await equipmentTypesAPI.createEquipmentType({
@@ -1569,10 +2198,17 @@ const formatDate = (dateString: string) => {
 }
 
 // Вспомогательные функции для карточного вида
-const getFirstImage = (imagelinks?: string): string | null => {
-  if (!imagelinks) return null
+const getFirstImage = (imagelinks?: EquipmentImage[] | string[] | string): string | undefined => {
+  if (!imagelinks) return undefined
+  if (Array.isArray(imagelinks)) {
+    if (imagelinks.length === 0) return undefined
+    const first = imagelinks[0]
+    if (!first) return undefined
+    return typeof first === 'string' ? first : first.url
+  }
+  // Fallback for legacy string data
   const links = imagelinks.split(',').map(link => link.trim()).filter(link => link)
-  return links.length > 0 ? links[0] : null
+  return links.length > 0 ? links[0] : undefined
 }
 
 const truncateText = (text: string, maxLength: number): string => {
@@ -1594,7 +2230,31 @@ const handleImageError = (event: Event) => {
 }
 
 // Lifecycle
+// Handle currency change - add new currency to exchange rates if needed
+const handleCurrencyChange = async (value: string) => {
+  if (!value) return
+  
+  // Check if currency exists in available currencies
+  const upperValue = value.toUpperCase().trim()
+  if (!availableCurrencies.value.includes(upperValue) && upperValue !== 'KZT') {
+    try {
+      // Try to add new currency via API
+      const success = await exchangeRateStore.addCurrency(upperValue)
+      if (success) {
+        formData.equipment_price_currency_type = upperValue
+        ElMessage.success(`Валюта ${upperValue} добавлена`)
+      }
+    } catch (error: any) {
+      console.error('Failed to add currency:', error)
+      // Still allow the user to use the currency even if API call fails
+    }
+  }
+}
+
 onMounted(async () => {
+  // Load exchange rates first
+  await exchangeRateStore.fetchRates()
+  
   await Promise.all([
     loadEquipment(),
     loadCategories(),
@@ -1877,5 +2537,14 @@ onMounted(async () => {
 
 .select-option-with-delete:hover .el-button {
   opacity: 1;
+}
+
+.link-url-cell {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+  color: #909399;
+  font-size: 13px;
 }
 </style>

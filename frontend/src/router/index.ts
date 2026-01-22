@@ -19,7 +19,8 @@ const router = createRouter({
     {
       path: '/',
       name: 'home',
-      redirect: '/dashboard',
+      component: () => import('../views/HomeView.vue'),
+      meta: { requiresAuth: true },
     },
     {
       path: '/dashboard',
@@ -45,6 +46,24 @@ const router = createRouter({
       name: 'proposals',
       component: () => import('../views/ProposalsView.vue'),
       meta: { requiresAuth: true, requiresManager: true },
+    },
+    {
+      path: '/manufacturers',
+      name: 'manufacturers',
+      component: () => import('../views/ManufacturerListView.vue'),
+      meta: { requiresAuth: true, requiresManager: true },
+    },
+    {
+      path: '/proposal-constructor',
+      name: 'proposal-constructor',
+      component: () => import('../views/ProposalConstructorView.vue'),
+      meta: { requiresAuth: true, requiresManager: true },
+    },
+    {
+      path: '/users',
+      name: 'users',
+      component: () => import('../views/UsersView.vue'),
+      meta: { requiresAuth: true, requiresAdmin: true },
     },
     // 404 страница
     {
@@ -76,6 +95,12 @@ router.beforeEach(async (to: RouteLocationNormalized, from: RouteLocationNormali
 
   // Проверка прав доступа для менеджеров/администраторов
   if (to.meta.requiresManager && !authStore.isManager) {
+    next({ name: 'home' })
+    return
+  }
+
+  // Проверка прав доступа только для администраторов
+  if (to.meta.requiresAdmin && !authStore.isAdmin) {
     next({ name: 'home' })
     return
   }
