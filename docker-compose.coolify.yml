@@ -1,6 +1,7 @@
 version: '3.8'
 
 # Docker Compose конфигурация для Coolify Platform
+# Оптимизировано для постепенного развертывания и снижения нагрузки на сервер
 # Coolify автоматически создает сеть для стека, поэтому явное определение networks не требуется
 # Все переменные окружения должны быть объявлены здесь для отображения в Coolify UI
 
@@ -19,11 +20,25 @@ services:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DATABASE_USER:-postgres}"]
-      interval: 10s
+      interval: 15s
       timeout: 5s
       retries: 5
-      start_period: 10s
+      start_period: 20s
     restart: unless-stopped
+    # Ограничения ресурсов для снижения нагрузки
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+        window: 120s
     # Исключаем из healthcheck Coolify, так как это внутренний сервис
     labels:
       - "coolify.managed=true"
@@ -36,14 +51,28 @@ services:
       - "6379"
     volumes:
       - redis_data:/data
-    command: redis-server --appendonly yes
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
+      interval: 15s
       timeout: 5s
       retries: 5
-      start_period: 5s
+      start_period: 10s
     restart: unless-stopped
+    # Ограничения ресурсов
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+        window: 120s
     labels:
       - "coolify.managed=true"
       - "coolify.excludeFromHC=true"
@@ -81,9 +110,23 @@ services:
       test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8000/admin/ || exit 1"]
       interval: 30s
       timeout: 10s
-      retries: 3
-      start_period: 60s
+      retries: 5
+      start_period: 120s
     restart: unless-stopped
+    # Ограничения ресурсов и политика перезапуска
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 3
+        window: 120s
     labels:
       - "coolify.managed=true"
       # Можно добавить домен через Coolify UI для этого сервиса
@@ -105,14 +148,29 @@ services:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
       - PYTHONUNBUFFERED=1
+      - SKIP_MIGRATIONS=1
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
       backend:
-        condition: service_started
+        condition: service_healthy
     restart: unless-stopped
+    # Ограничения ресурсов
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 3
+        window: 120s
     labels:
       - "coolify.managed=true"
       - "coolify.excludeFromHC=true"
@@ -128,14 +186,29 @@ services:
       - media_volume:/app/media
       - static_volume:/app/staticfiles
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:80 || exit 1"]
       interval: 30s
       timeout: 10s
-      retries: 3
-      start_period: 30s
+      retries: 5
+      start_period: 60s
     restart: unless-stopped
+    # Ограничения ресурсов
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 3
+        window: 120s
     labels:
       - "coolify.managed=true"
       # Можно добавить домен через Coolify UI для этого сервиса

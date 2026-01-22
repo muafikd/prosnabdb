@@ -43,13 +43,18 @@ fi
 
 echo "Database available"
 
-# Apply database migrations
-echo "Applying database migrations..."
-python manage.py migrate
+# Skip migrations and collectstatic if SKIP_MIGRATIONS is set (for worker containers)
+if [ -z "$SKIP_MIGRATIONS" ]; then
+    # Apply database migrations
+    echo "Applying database migrations..."
+    python manage.py migrate
 
-# Collect static files
-echo "Collecting static files..."
-python manage.py collectstatic --noinput
+    # Collect static files
+    echo "Collecting static files..."
+    python manage.py collectstatic --noinput
+else
+    echo "Skipping migrations and collectstatic (SKIP_MIGRATIONS is set)"
+fi
 
 # Start command
 echo "Starting command: $@"
