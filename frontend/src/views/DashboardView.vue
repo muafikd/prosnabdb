@@ -105,12 +105,12 @@
                 v-model="dateRange"
                 type="monthrange"
                 range-separator="—"
-                start-placeholder="Начало периода"
-                end-placeholder="Конец периода"
+                start-placeholder="Начало"
+                end-placeholder="Конец"
                 format="YYYY-MM"
                 value-format="YYYY-MM-DD"
                 @change="handleDateRangeChange"
-                style="width: 300px;"
+                style="width: 240px;"
               />
             </div>
           </template>

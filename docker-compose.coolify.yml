@@ -1,0 +1,151 @@
+version: '3.8'
+
+# Docker Compose конфигурация для Coolify Platform
+# Coolify автоматически создает сеть для стека, поэтому явное определение networks не требуется
+# Все переменные окружения должны быть объявлены здесь для отображения в Coolify UI
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: ${COMPOSE_PROJECT_NAME:-prosnab}_postgres
+    environment:
+      POSTGRES_DB: ${DATABASE_NAME:-prosnab_db}
+      POSTGRES_USER: ${DATABASE_USER:-postgres}
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD}
+    # Порт не публикуем наружу, только внутри сети Coolify
+    expose:
+      - "5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DATABASE_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    # Исключаем из healthcheck Coolify, так как это внутренний сервис
+    labels:
+      - "coolify.managed=true"
+      - "coolify.excludeFromHC=true"
+
+  redis:
+    image: redis:7-alpine
+    container_name: ${COMPOSE_PROJECT_NAME:-prosnab}_redis
+    expose:
+      - "6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+    labels:
+      - "coolify.managed=true"
+      - "coolify.excludeFromHC=true"
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ${COMPOSE_PROJECT_NAME:-prosnab}_backend
+    volumes:
+      - media_volume:/app/media
+      - static_volume:/app/staticfiles
+    # Порт для прямого доступа (опционально, можно использовать домен через Coolify)
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    environment:
+      - DATABASE_HOST=postgres
+      - DATABASE_NAME=${DATABASE_NAME:-prosnab_db}
+      - DATABASE_USER=${DATABASE_USER:-postgres}
+      - DATABASE_PASSWORD=${DATABASE_PASSWORD}
+      - DATABASE_PORT=5432
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - ALLOWED_HOSTS=${ALLOWED_HOSTS:-*}
+      - DEBUG=${DEBUG:-0}
+      - SECRET_KEY=${SECRET_KEY}
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      # Проверяем доступность Django admin (всегда доступен)
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8000/admin/ || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+    labels:
+      - "coolify.managed=true"
+      # Можно добавить домен через Coolify UI для этого сервиса
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ${COMPOSE_PROJECT_NAME:-prosnab}_worker
+    command: celery -A prosnabdb worker -l info --concurrency=2
+    volumes:
+      - media_volume:/app/media
+    environment:
+      - DATABASE_HOST=postgres
+      - DATABASE_NAME=${DATABASE_NAME:-prosnab_db}
+      - DATABASE_USER=${DATABASE_USER:-postgres}
+      - DATABASE_PASSWORD=${DATABASE_PASSWORD}
+      - DATABASE_PORT=5432
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_started
+    restart: unless-stopped
+    labels:
+      - "coolify.managed=true"
+      - "coolify.excludeFromHC=true"
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: ${COMPOSE_PROJECT_NAME:-prosnab}_frontend
+    ports:
+      - "${FRONTEND_PORT:-80}:80"
+    volumes:
+      - media_volume:/app/media
+      - static_volume:/app/staticfiles
+    depends_on:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:80 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    labels:
+      - "coolify.managed=true"
+      # Можно добавить домен через Coolify UI для этого сервиса
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  media_volume:
+    driver: local
+  static_volume:
+    driver: local
