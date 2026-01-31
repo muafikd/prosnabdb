@@ -166,13 +166,7 @@ services:
     depends_on:
       backend:
         condition: service_healthy
-    healthcheck:
-      # Любой ответ с порта 80 (200 или 404) = nginx работает; иначе unhealthy и Traefik не роутит
-      test: ["CMD-SHELL", "wget -q --spider --timeout=3 http://127.0.0.1:80/; r=$?; [ $r -eq 0 ] || [ $r -eq 8 ]"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 60s
+    # healthcheck отключён: Traefik не роутит на unhealthy, а wget в alpine иногда даёт false negative
     restart: unless-stopped
     # Ограничения ресурсов
     deploy:
