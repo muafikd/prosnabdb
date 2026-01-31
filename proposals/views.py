@@ -426,6 +426,50 @@ class EquipmentDetailsDetailView(generics.RetrieveUpdateDestroyAPIView):
     lookup_field = 'detail_id'
 
 
+class EquipmentDetailsBulkView(APIView):
+    """
+    Bulk import/update equipment details. Accepts [{"key": "Вес", "value": "10кг"}, ...].
+    Uses update_or_create by (equipment_id, detail_parameter_name): existing params are updated, new ones created.
+    """
+    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+
+    def post(self, request, equipment_id):
+        items = request.data
+        if not isinstance(items, list):
+            return Response(
+                {'error': 'Expected a list of objects with "key" and "value".'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        Equipment.objects.get(pk=equipment_id)  # 404 if not found
+        created_count = 0
+        updated_count = 0
+        for item in items:
+            key = (item.get('key') or item.get('detail_parameter_name') or '').strip()
+            value = (item.get('value') or item.get('detail_parameter_value') or '')
+            if not key:
+                continue
+            value_str = value.strip() if isinstance(value, str) else str(value).strip()
+            obj = EquipmentDetails.objects.filter(
+                equipment_id=equipment_id, detail_parameter_name=key
+            ).first()
+            if obj:
+                obj.detail_parameter_value = value_str or None
+                obj.save()
+                updated_count += 1
+            else:
+                EquipmentDetails.objects.create(
+                    equipment_id=equipment_id,
+                    detail_parameter_name=key,
+                    detail_parameter_value=value_str or None
+                )
+                created_count += 1
+        return Response({
+            'created': created_count,
+            'updated': updated_count,
+            'total': created_count + updated_count
+        }, status=status.HTTP_200_OK)
+
+
 class EquipmentSpecificationListView(generics.ListCreateAPIView):
     """
     Endpoint for listing all equipment specifications and creating new equipment specifications.
@@ -466,6 +510,50 @@ class EquipmentSpecificationDetailView(generics.RetrieveUpdateDestroyAPIView):
     serializer_class = EquipmentSpecificationSerializer
     permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
     lookup_field = 'spec_id'
+
+
+class EquipmentSpecificationBulkView(APIView):
+    """
+    Bulk import/update equipment specifications. Accepts [{"key": "Мощность", "value": "0,55 кВт"}, ...].
+    Uses update_or_create by (equipment_id, spec_parameter_name): existing params are updated, new ones created.
+    """
+    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+
+    def post(self, request, equipment_id):
+        items = request.data
+        if not isinstance(items, list):
+            return Response(
+                {'error': 'Expected a list of objects with "key" and "value".'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        Equipment.objects.get(pk=equipment_id)  # 404 if not found
+        created_count = 0
+        updated_count = 0
+        for item in items:
+            key = (item.get('key') or item.get('spec_parameter_name') or '').strip()
+            value = (item.get('value') or item.get('spec_parameter_value') or '')
+            if not key:
+                continue
+            value_str = value.strip() if isinstance(value, str) else str(value).strip()
+            obj = EquipmentSpecification.objects.filter(
+                equipment_id=equipment_id, spec_parameter_name=key
+            ).first()
+            if obj:
+                obj.spec_parameter_value = value_str or None
+                obj.save()
+                updated_count += 1
+            else:
+                EquipmentSpecification.objects.create(
+                    equipment_id=equipment_id,
+                    spec_parameter_name=key,
+                    spec_parameter_value=value_str or None
+                )
+                created_count += 1
+        return Response({
+            'created': created_count,
+            'updated': updated_count,
+            'total': created_count + updated_count
+        }, status=status.HTTP_200_OK)
 
 
 class EquipmentTechProcessListView(generics.ListCreateAPIView):

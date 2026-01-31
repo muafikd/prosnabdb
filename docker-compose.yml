@@ -1,4 +1,5 @@
-version: '3.8'
+# Локальная разработка: БД во внешнем контейнере (prosnabdb), сеть prosnab_shared.
+# Прод (Coolify) использует docker-compose.coolify.yml — другой файл, эти настройки на прод не влияют.
 
 services:
   redis:
@@ -17,18 +18,20 @@ services:
     ports:
       - "8002:8000"
     environment:
-      - DATABASE_HOST=host.docker.internal
-      - DATABASE_NAME=prosnab_db
-      - DATABASE_USER=postgres
-      - DATABASE_PASSWORD=0#T%2
-      - DATABASE_PORT=5435
+      # Подключение к БД в отдельном контейнере prosnabdb (сеть prosnab_shared)
+      - DATABASE_HOST=prosnabdb
+      - DATABASE_PORT=5432
+      - DATABASE_NAME=${DATABASE_NAME:-prosnab_db}
+      - DATABASE_USER=${DATABASE_USER:-postgres}
+      - DATABASE_PASSWORD=${DATABASE_PASSWORD}
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
       - ALLOWED_HOSTS=*
       - DEBUG=1
       - PYTHONUNBUFFERED=1
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    networks:
+      - default
+      - prosnab_shared
     depends_on:
       - redis
 
@@ -40,16 +43,17 @@ services:
       - .:/app
       - media_volume:/app/media
     environment:
-      - DATABASE_HOST=host.docker.internal
-      - DATABASE_NAME=prosnab_db
-      - DATABASE_USER=postgres
-      - DATABASE_PASSWORD=0#T%2
-      - DATABASE_PORT=5435
+      - DATABASE_HOST=prosnabdb
+      - DATABASE_PORT=5432
+      - DATABASE_NAME=${DATABASE_NAME:-prosnab_db}
+      - DATABASE_USER=${DATABASE_USER:-postgres}
+      - DATABASE_PASSWORD=${DATABASE_PASSWORD}
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
       - PYTHONUNBUFFERED=1
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    networks:
+      - default
+      - prosnab_shared
     depends_on:
       - redis
       - backend
@@ -64,6 +68,10 @@ services:
       - static_volume:/app/static
     depends_on:
       - backend
+
+networks:
+  prosnab_shared:
+    external: true
 
 volumes:
   media_volume:

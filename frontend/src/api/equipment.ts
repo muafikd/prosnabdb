@@ -198,6 +198,17 @@ export interface EquipmentTechProcessCreateData {
   tech_desc?: string
 }
 
+export interface BulkKeyValueItem {
+  key: string
+  value: string
+}
+
+export interface BulkKeyValueResponse {
+  created: number
+  updated: number
+  total: number
+}
+
 export const equipmentDetailsAPI = {
   async createDetail(data: EquipmentDetailCreateData): Promise<EquipmentDetail> {
     const response: AxiosResponse<EquipmentDetail> = await apiClient.post('/equipment-details/', data)
@@ -209,6 +220,13 @@ export const equipmentDetailsAPI = {
   },
   async deleteDetail(detailId: number): Promise<void> {
     await apiClient.delete(`/equipment-details/${detailId}/`)
+  },
+  async bulkUpsert(equipmentId: number, items: BulkKeyValueItem[]): Promise<BulkKeyValueResponse> {
+    const response: AxiosResponse<BulkKeyValueResponse> = await apiClient.post(
+      `/equipment/${equipmentId}/details/bulk/`,
+      items
+    )
+    return response.data
   },
 }
 
@@ -223,6 +241,13 @@ export const equipmentSpecificationsAPI = {
   },
   async deleteSpecification(specId: number): Promise<void> {
     await apiClient.delete(`/equipment-specifications/${specId}/`)
+  },
+  async bulkUpsert(equipmentId: number, items: BulkKeyValueItem[]): Promise<BulkKeyValueResponse> {
+    const response: AxiosResponse<BulkKeyValueResponse> = await apiClient.post(
+      `/equipment/${equipmentId}/specifications/bulk/`,
+      items
+    )
+    return response.data
   },
 }
 

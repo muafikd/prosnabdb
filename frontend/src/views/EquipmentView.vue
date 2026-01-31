@@ -653,10 +653,15 @@
           <div class="dynamic-list">
             <div class="list-header">
               <h3>Детали оборудования</h3>
-              <el-button type="primary" size="small" @click="addDetail">
-                <el-icon><Plus /></el-icon>
-                Добавить деталь
-              </el-button>
+              <div style="display: flex; gap: 8px;">
+                <el-button type="primary" size="small" @click="addDetail">
+                  <el-icon><Plus /></el-icon>
+                  Добавить деталь
+                </el-button>
+                <el-button size="small" @click="openImportModal('details')">
+                  Импорт из буфера (Ctrl+V)
+                </el-button>
+              </div>
             </div>
             <el-table :data="localDetails" border style="width: 100%">
               <el-table-column prop="detail_parameter_name" label="Название параметра" min-width="200">
@@ -697,10 +702,15 @@
           <div class="dynamic-list">
             <div class="list-header">
               <h3>Спецификации оборудования</h3>
-              <el-button type="primary" size="small" @click="addSpecification">
-                <el-icon><Plus /></el-icon>
-                Добавить спецификацию
-              </el-button>
+              <div style="display: flex; gap: 8px;">
+                <el-button type="primary" size="small" @click="addSpecification">
+                  <el-icon><Plus /></el-icon>
+                  Добавить спецификацию
+                </el-button>
+                <el-button size="small" @click="openImportModal('specifications')">
+                  Импорт из буфера (Ctrl+V)
+                </el-button>
+              </div>
             </div>
             <el-table :data="localSpecifications" border style="width: 100%">
               <el-table-column prop="spec_parameter_name" label="Название параметра" min-width="200">
@@ -741,10 +751,15 @@
           <div class="dynamic-list">
             <div class="list-header">
               <h3>Технологические процессы</h3>
-              <el-button type="primary" size="small" @click="addTechProcess">
-                <el-icon><Plus /></el-icon>
-                Добавить процесс
-              </el-button>
+              <div style="display: flex; gap: 8px;">
+                <el-button type="primary" size="small" @click="addTechProcess">
+                  <el-icon><Plus /></el-icon>
+                  Добавить процесс
+                </el-button>
+                <el-button size="small" @click="openImportModal('tech_processes')">
+                  Импорт из буфера (Ctrl+V)
+                </el-button>
+              </div>
             </div>
             <el-table :data="localTechProcesses" border style="width: 100%">
               <el-table-column prop="tech_name" label="Название процесса" min-width="200">
@@ -908,6 +923,57 @@
         <el-button type="primary" @click="handleSaveLink">Сохранить</el-button>
       </template>
     </el-dialog>
+
+    <!-- Диалог быстрого импорта: вставка из буфера → парсинг по строкам и табуляции → превью → применить -->
+    <el-dialog
+      v-model="importModalVisible"
+      :title="importModalTitle"
+      width="720px"
+      append-to-body
+      @opened="focusImportTextarea"
+    >
+      <div class="import-paste-area">
+        <el-input
+          ref="importTextareaRef"
+          v-model="importPasteText"
+          type="textarea"
+          :rows="5"
+          :placeholder="importType === 'tech_processes' ? 'Вставьте текст (Ctrl+V). Строки — по Enter, колонки «Название», «Значение», «Описание» — по Tab.' : 'Вставьте текст (Ctrl+V). Строки — по Enter, колонки «Параметр» и «Значение» — по Tab.'"
+          @paste="onImportPaste"
+        />
+        <el-button type="primary" size="small" style="margin-top: 10px" @click="parseImportText">
+          Разобрать и показать превью
+        </el-button>
+      </div>
+      <div v-if="parsedImportItems.length > 0" class="import-preview">
+        <h4>Превью (можно удалить лишнее)</h4>
+        <el-table :data="parsedImportItems" border max-height="280" size="small">
+          <template v-if="importType === 'tech_processes'">
+            <el-table-column prop="col1" label="Название процесса" min-width="160" />
+            <el-table-column prop="col2" label="Значение" min-width="120" show-overflow-tooltip />
+            <el-table-column prop="col3" label="Описание" min-width="200" show-overflow-tooltip />
+          </template>
+          <template v-else>
+            <el-table-column prop="col1" label="Параметр" min-width="160" />
+            <el-table-column prop="col2" label="Значение" min-width="200" show-overflow-tooltip />
+          </template>
+          <el-table-column label="" width="60" align="center">
+            <template #default="{ $index }">
+              <el-button type="danger" size="small" :icon="Delete" circle @click="removeParsedImportItem($index)" />
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
+      <template #footer>
+        <span class="dialog-footer">
+          <el-button @click="importModalVisible = false">Отмена</el-button>
+          <el-button type="primary" :disabled="parsedImportItems.length === 0" @click="applyImport">
+            Применить к {{ importApplyLabel }}
+          </el-button>
+        </span>
+      </template>
+    </el-dialog>
+
     <!-- Диалог для добавления/редактирования документа -->
     <el-dialog
       v-model="documentModalVisible"
@@ -961,7 +1027,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted, computed } from 'vue'
+import { ref, reactive, onMounted, computed, nextTick } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import { Plus, Edit, Delete, Search, List, Grid, Picture, Link, Document, Loading } from '@element-plus/icons-vue'
 import {
@@ -1070,6 +1136,123 @@ const currentImageForm = reactive({
   url: '',
   index: -1
 })
+
+// State for quick import (paste from clipboard)
+// Единая структура: col1, col2, col3 (для деталей/спецификаций col3 пустой)
+type ParsedImportRow = { col1: string; col2: string; col3: string }
+const importModalVisible = ref(false)
+const importType = ref<'details' | 'specifications' | 'tech_processes'>('details')
+const importPasteText = ref('')
+const parsedImportItems = ref<ParsedImportRow[]>([])
+const importTextareaRef = ref<{ focus: () => void } | null>(null)
+
+const importModalTitle = computed(() => {
+  if (importType.value === 'details') return 'Импорт деталей из буфера'
+  if (importType.value === 'specifications') return 'Импорт спецификаций из буфера'
+  return 'Импорт техпроцессов из буфера'
+})
+
+const importApplyLabel = computed(() => {
+  if (importType.value === 'details') return 'детали'
+  if (importType.value === 'specifications') return 'спецификациям'
+  return 'техпроцессам'
+})
+
+function openImportModal(type: 'details' | 'specifications' | 'tech_processes') {
+  importType.value = type
+  importPasteText.value = ''
+  parsedImportItems.value = []
+  importModalVisible.value = true
+}
+
+function parseImportText() {
+  const text = importPasteText.value || ''
+  const lines = text.split('\n').map(s => s.trim()).filter(Boolean)
+  const items: ParsedImportRow[] = []
+  const isTech = importType.value === 'tech_processes'
+  for (const line of lines) {
+    const parts = line.split('\t').map(s => s.trim())
+    const col1 = parts[0] || ''
+    if (!col1) continue
+    if (isTech) {
+      const col2 = parts[1] || ''
+      const col3 = parts.slice(2).join('\t').trim() || ''
+      items.push({ col1, col2, col3 })
+    } else {
+      const col2 = parts.slice(1).join('\t').trim() || ''
+      items.push({ col1, col2, col3: '' })
+    }
+  }
+  parsedImportItems.value = items
+}
+
+function onImportPaste() {
+  setTimeout(() => parseImportText(), 0)
+}
+
+function removeParsedImportItem(index: number) {
+  parsedImportItems.value.splice(index, 1)
+}
+
+function applyImport() {
+  if (importType.value === 'details') {
+    for (const item of parsedImportItems.value) {
+      const existing = localDetails.value.find(
+        d => (d.detail_parameter_name || '').trim().toLowerCase() === item.col1.trim().toLowerCase()
+      )
+      if (existing) {
+        existing.detail_parameter_value = item.col2
+      } else {
+        localDetails.value.push({
+          detail_id: 0,
+          detail_parameter_name: item.col1,
+          detail_parameter_value: item.col2,
+          isNew: true
+        })
+      }
+    }
+  } else if (importType.value === 'specifications') {
+    for (const item of parsedImportItems.value) {
+      const existing = localSpecifications.value.find(
+        s => (s.spec_parameter_name || '').trim().toLowerCase() === item.col1.trim().toLowerCase()
+      )
+      if (existing) {
+        existing.spec_parameter_value = item.col2
+      } else {
+        localSpecifications.value.push({
+          spec_id: 0,
+          spec_parameter_name: item.col1,
+          spec_parameter_value: item.col2,
+          isNew: true
+        })
+      }
+    }
+  } else {
+    for (const item of parsedImportItems.value) {
+      const existing = localTechProcesses.value.find(
+        t => (t.tech_name || '').trim().toLowerCase() === item.col1.trim().toLowerCase()
+      )
+      if (existing) {
+        existing.tech_value = item.col2
+        existing.tech_desc = item.col3
+      } else {
+        localTechProcesses.value.push({
+          tech_id: 0,
+          tech_name: item.col1,
+          tech_value: item.col2,
+          tech_desc: item.col3,
+          isNew: true
+        })
+      }
+    }
+  }
+  importModalVisible.value = false
+  ElMessage.success(`Добавлено записей: ${parsedImportItems.value.length}`)
+}
+
+function focusImportTextarea() {
+  nextTick(() => importTextareaRef.value?.focus?.())
+}
 
 // State for document modal
 const documentModalVisible = ref(false)

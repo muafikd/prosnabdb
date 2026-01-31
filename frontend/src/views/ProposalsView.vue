@@ -839,12 +839,15 @@
         :data="filteredEquipment"
         max-height="400"
       >
-        <el-table-column prop="equipment_name" label="Название" />
+        <el-table-column prop="equipment_name" label="Название" min-width="200" />
         <el-table-column prop="equipment_articule" label="Артикул" width="120" />
-        <el-table-column prop="equipment_manufacture_price" label="Цена" width="120">
-            <template #default="{ row }">
-               {{ formatPrice(row.equipment_manufacture_price, row.equipment_price_currency_type) }}
-            </template>
+        <el-table-column label="Цена продажи (KZT)" width="150">
+          <template #default="{ row }">
+            <span v-if="row.sale_price_kzt !== undefined && row.sale_price_kzt !== null && row.sale_price_kzt !== ''">
+              {{ formatPrice(row.sale_price_kzt, 'KZT') }}
+            </span>
+            <span v-else style="color: #999;">—</span>
+          </template>
         </el-table-column>
         <el-table-column label="Действие" width="100">
           <template #default="{ row }">

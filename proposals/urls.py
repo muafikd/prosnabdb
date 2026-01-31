@@ -43,10 +43,12 @@ urlpatterns = [
     # Equipment Details CRUD endpoints
     path('equipment-details/', views.EquipmentDetailsListView.as_view(), name='equipment-details-list'),
     path('equipment-details/<int:detail_id>/', views.EquipmentDetailsDetailView.as_view(), name='equipment-details-detail'),
+    path('equipment/<int:equipment_id>/details/bulk/', views.EquipmentDetailsBulkView.as_view(), name='equipment-details-bulk'),
     
     # Equipment Specification CRUD endpoints
     path('equipment-specifications/', views.EquipmentSpecificationListView.as_view(), name='equipment-specification-list'),
     path('equipment-specifications/<int:spec_id>/', views.EquipmentSpecificationDetailView.as_view(), name='equipment-specification-detail'),
+    path('equipment/<int:equipment_id>/specifications/bulk/', views.EquipmentSpecificationBulkView.as_view(), name='equipment-specifications-bulk'),
     
     # Equipment Tech Process CRUD endpoints
     path('equipment-tech-processes/', views.EquipmentTechProcessListView.as_view(), name='equipment-tech-process-list'),
