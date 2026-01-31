@@ -11,49 +11,13 @@ version: '3.8'
 #      ↓
 #   backend (PRIVATE)   ← доступен только из frontend по имени backend:8000
 #      ↓
-#   postgres / redis (PRIVATE)
+#   redis (PRIVATE)     postgres — внешний контейнер (Coolify Database)
 #
+# База данных: отдельный контейнер Coolify (например postgresql-database-xxx).
+# В Coolify: привязать этот Database к приложению и задать DATABASE_HOST=имя_контейнера_БД.
 # Все переменные окружения объявлены здесь для отображения в Coolify UI.
 
 services:
-  postgres:
-    image: postgres:16-alpine
-    container_name: ${COMPOSE_PROJECT_NAME:-prosnab}_postgres
-    environment:
-      POSTGRES_DB: ${DATABASE_NAME:-prosnab_db}
-      POSTGRES_USER: ${DATABASE_USER:-postgres}
-      POSTGRES_PASSWORD: ${DATABASE_PASSWORD}
-    # Порт не публикуем наружу, только внутри сети Coolify
-    expose:
-      - "5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DATABASE_USER:-postgres}"]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 20s
-    restart: unless-stopped
-    # Ограничения ресурсов для снижения нагрузки
-    deploy:
-      resources:
-        limits:
-          cpus: '1.0'
-          memory: 512M
-        reservations:
-          cpus: '0.25'
-          memory: 256M
-      restart_policy:
-        condition: on-failure
-        delay: 5s
-        max_attempts: 3
-        window: 120s
-    # Исключаем из healthcheck Coolify, так как это внутренний сервис
-    labels:
-      - "coolify.managed=true"
-      - "coolify.excludeFromHC=true"
-
   redis:
     image: redis:7-alpine
     container_name: ${COMPOSE_PROJECT_NAME:-prosnab}_redis
@@ -99,11 +63,11 @@ services:
     expose:
       - "8000"
     environment:
-      - DATABASE_HOST=postgres
+      - DATABASE_HOST=${DATABASE_HOST:-postgresql-database-xk0okk0kk4c8ggkowkc8k4gs}
       - DATABASE_NAME=${DATABASE_NAME:-prosnab_db}
       - DATABASE_USER=${DATABASE_USER:-postgres}
       - DATABASE_PASSWORD=${DATABASE_PASSWORD}
-      - DATABASE_PORT=5432
+      - DATABASE_PORT=${DATABASE_PORT:-5432}
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
       - ALLOWED_HOSTS=${ALLOWED_HOSTS:-*}
@@ -111,8 +75,6 @@ services:
       - SECRET_KEY=${SECRET_KEY}
       - PYTHONUNBUFFERED=1
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
     healthcheck:
@@ -150,18 +112,16 @@ services:
     volumes:
       - media_volume:/app/media
     environment:
-      - DATABASE_HOST=postgres
+      - DATABASE_HOST=${DATABASE_HOST:-postgresql-database-xk0okk0kk4c8ggkowkc8k4gs}
       - DATABASE_NAME=${DATABASE_NAME:-prosnab_db}
       - DATABASE_USER=${DATABASE_USER:-postgres}
       - DATABASE_PASSWORD=${DATABASE_PASSWORD}
-      - DATABASE_PORT=5432
+      - DATABASE_PORT=${DATABASE_PORT:-5432}
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
       - PYTHONUNBUFFERED=1
       - SKIP_MIGRATIONS=1
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
       backend:
@@ -225,8 +185,6 @@ services:
       # Единственная точка входа: в Coolify привязать домен к этому сервису (Traefik → frontend:80)
 
 volumes:
-  postgres_data:
-    driver: local
   redis_data:
     driver: local
   media_volume:
