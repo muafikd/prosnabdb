@@ -91,7 +91,7 @@ class ExchangeRateService:
                         currency_to='KZT',
                         defaults={
                             'rate_value': rate_value,
-                            'source': 'api_nb_rk',
+                            'source': 'api_nbrk',
                             'is_active': True,
                             'is_official': True
                         }

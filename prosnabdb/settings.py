@@ -255,9 +255,10 @@ CELERY_RESULT_BACKEND = config('CELERY_RESULT_BACKEND', default='redis://redis:6
 CELERY_ACCEPT_CONTENT = ['application/json']
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TASK_SERIALIZER = 'json'
-CELERY_TIMEZONE = TIME_ZONE
+# Таймзона для Celery Beat: расписание в местном времени (Казахстан)
+CELERY_TIMEZONE = config('CELERY_TIMEZONE', default='Asia/Almaty')
 
-# Celery beat schedule: sync exchange rates at 09:30 and 16:30 local time
+# Celery beat schedule: sync exchange rates at 09:30 and 16:30 local time (Almaty)
 CELERY_BEAT_SCHEDULE = {
     'sync-exchange-rates-morning': {
         'task': 'proposals.tasks.sync_exchange_rates_task',

@@ -58,6 +58,28 @@ services:
       - redis
       - backend
 
+  beat:
+    build: .
+    container_name: project_prosnab_beat
+    command: celery -A prosnabdb beat -l info
+    volumes:
+      - .:/app
+    environment:
+      - DATABASE_HOST=prosnabdb
+      - DATABASE_PORT=5432
+      - DATABASE_NAME=${DATABASE_NAME:-prosnab_db}
+      - DATABASE_USER=${DATABASE_USER:-postgres}
+      - DATABASE_PASSWORD=${DATABASE_PASSWORD}
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - PYTHONUNBUFFERED=1
+    networks:
+      - default
+      - prosnab_shared
+    depends_on:
+      - redis
+      - backend
+
   frontend:
     build: ./frontend
     container_name: project_prosnab_frontend
