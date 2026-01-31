@@ -13,9 +13,11 @@ version: '3.8'
 #      ↓
 #   redis (PRIVATE)     postgres — внешний контейнер (Coolify Database)
 #
-# База данных: отдельный контейнер Coolify (например postgresql-database-xxx).
-# В Coolify: привязать этот Database к приложению и задать DATABASE_HOST=имя_контейнера_БД.
-# Все переменные окружения объявлены здесь для отображения в Coolify UI.
+# База данных: отдельный контейнер Coolify. Приложение и БД в разных сетях — резолв по
+# имени контейнера не работает. Подключаться через хост и опубликованный порт БД:
+#   DATABASE_HOST=host.docker.internal  (для Linux в compose добавлен extra_hosts)
+#   DATABASE_PORT=3322                   (порт из docker ps для контейнера postgres)
+# В Coolify → Environment приложения задать переменные БД.
 
 services:
   redis:
@@ -59,15 +61,18 @@ services:
     volumes:
       - media_volume:/app/media
       - static_volume:/app/staticfiles
+    # Резолв host.docker.internal на Linux (подключение к БД на хосте)
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     # PRIVATE: порт только внутри сети, доступ с frontend по backend:8000
     expose:
       - "8000"
     environment:
-      - DATABASE_HOST=${DATABASE_HOST:-postgresql-database-xk0okk0kk4c8ggkowkc8k4gs}
+      - DATABASE_HOST=${DATABASE_HOST:-host.docker.internal}
       - DATABASE_NAME=${DATABASE_NAME:-prosnab_db}
       - DATABASE_USER=${DATABASE_USER:-postgres}
       - DATABASE_PASSWORD=${DATABASE_PASSWORD}
-      - DATABASE_PORT=${DATABASE_PORT:-5432}
+      - DATABASE_PORT=${DATABASE_PORT:-3322}
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
       - ALLOWED_HOSTS=${ALLOWED_HOSTS:-*}
@@ -82,8 +87,8 @@ services:
       test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8000/admin/ || exit 1"]
       interval: 30s
       timeout: 10s
-      retries: 5
-      start_period: 120s
+      retries: 10
+      start_period: 180s
     restart: unless-stopped
     # Ограничения ресурсов и политика перезапуска
     deploy:
@@ -111,12 +116,14 @@ services:
     command: celery -A prosnabdb worker -l info --concurrency=2
     volumes:
       - media_volume:/app/media
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
-      - DATABASE_HOST=${DATABASE_HOST:-postgresql-database-xk0okk0kk4c8ggkowkc8k4gs}
+      - DATABASE_HOST=${DATABASE_HOST:-host.docker.internal}
       - DATABASE_NAME=${DATABASE_NAME:-prosnab_db}
       - DATABASE_USER=${DATABASE_USER:-postgres}
       - DATABASE_PASSWORD=${DATABASE_PASSWORD}
-      - DATABASE_PORT=${DATABASE_PORT:-5432}
+      - DATABASE_PORT=${DATABASE_PORT:-3322}
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
       - PYTHONUNBUFFERED=1
