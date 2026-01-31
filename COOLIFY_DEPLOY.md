@@ -58,3 +58,35 @@
 | Save + Redeploy | После любых изменений домена/переменных |
 
 Отдельно настраивать SSL в docker-compose или Dockerfile не нужно — Coolify и Traefik делают это по полю домена с `https://`.
+
+---
+
+## Если фронт не открывается
+
+### Проверка DNS (без протокола)
+
+Команда `host` принимает только имя хоста, **без** `https://`:
+
+```bash
+host kp.mevent.kz
+# или
+ping -c 2 kp.mevent.kz
+```
+
+Должен отвечать IP сервера. Если NXDOMAIN — проверь A-запись для `kp.mevent.kz`.
+
+### Frontend в статусе unhealthy
+
+Если контейнер frontend **unhealthy**, Traefik может не направлять на него трафик. Логи и содержимое:
+
+```bash
+docker logs 89d237fb2aae
+# или подставь ID/имя из docker ps:
+docker ps
+docker logs <CONTAINER_ID_или_имя_frontend>
+
+# Есть ли index.html в контейнере:
+docker exec <CONTAINER_ID_frontend> ls -la /usr/share/nginx/html/
+```
+
+В compose для frontend включён более мягкий healthcheck: любой ответ с порта 80 (в т.ч. 404) считается успехом. После пуша и Redeploy контейнер должен стать healthy.
