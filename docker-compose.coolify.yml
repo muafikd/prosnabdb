@@ -7,7 +7,7 @@ version: '3.8'
 #      ↓
 #   Traefik (80 / 443)  ← управляется Coolify
 #      ↓
-#   frontend (PUBLIC)   ← в Coolify привязать домен только к этому сервису
+#   frontend (PUBLIC)   ← в Coolify: Domains for frontend = https://kp.mevent.kz (SSL сам)
 #      ↓
 #   backend (PRIVATE)   ← доступен только из frontend по имени backend:8000
 #      ↓
@@ -189,7 +189,7 @@ services:
         window: 120s
     labels:
       - "coolify.managed=true"
-      # Единственная точка входа: в Coolify привязать домен к этому сервису (Traefik → frontend:80)
+      # Domains for frontend: ввести https://твой-домен (напр. https://kp.mevent.kz) — Coolify сам запросит Let's Encrypt
 
 volumes:
   redis_data:
