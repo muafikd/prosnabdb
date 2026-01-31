@@ -27,8 +27,8 @@ RUN chmod +x /app/entrypoint.sh
 
 # Run as non-root user
 RUN useradd -m app
-# Ensure media and static directories exist and are writable
-RUN mkdir -p /app/media /app/staticfiles && chown -R app:app /app/media /app/staticfiles
+# Ensure media (including photos), static directories exist and are writable
+RUN mkdir -p /app/media /app/media/photos /app/staticfiles && chown -R app:app /app/media /app/staticfiles
 
 USER app
 

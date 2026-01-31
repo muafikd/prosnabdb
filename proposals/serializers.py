@@ -7,6 +7,8 @@ from .models import (
     EquipmentList, EquipmentListLineItem, EquipmentListItem, PaymentLog, CommercialProposal,
     ExchangeRate, CostCalculation, ProposalTemplate, SectionTemplate
 )
+from django.conf import settings
+from .services import LinkConverterService, CloudImageImportService
 
 
 class UserRegistrationSerializer(serializers.ModelSerializer):
@@ -307,6 +309,77 @@ class EquipmentSerializer(serializers.ModelSerializer):
             return float(latest_item.price_per_unit)
         
         return None
+
+    def _normalize_imagelinks(self, imagelinks):
+        """
+        Ensure equipment_imagelinks is always a list of {'name': str, 'url': str}
+        with cloud storage links converted to direct-view URLs.
+        """
+        if not imagelinks:
+            return []
+
+        result = []
+
+        # List from JSONField or incoming payload
+        if isinstance(imagelinks, list):
+            for item in imagelinks:
+                if isinstance(item, dict):
+                    name = item.get('name', '')
+                    url = item.get('url')
+                    if url:
+                        direct_url = LinkConverterService.get_direct_link(url)
+                        result.append({'name': name, 'url': direct_url})
+                elif isinstance(item, str):
+                    direct_url = LinkConverterService.get_direct_link(item)
+                    result.append({'name': '', 'url': direct_url})
+
+        # Legacy string value (comma-separated links)
+        elif isinstance(imagelinks, str):
+            links = [link.strip() for link in imagelinks.split(',') if link.strip()]
+            for link in links:
+                direct_url = LinkConverterService.get_direct_link(link)
+                result.append({'name': '', 'url': direct_url})
+
+        return result
+
+    def _build_equipment_imagelinks_response(self, instance):
+        """
+        Build equipment_imagelinks for API: local photos first (from EquipmentPhoto),
+        then legacy external links from JSONB (normalized). Local URLs are stable for constructor/PDF.
+        """
+        result = []
+        # Local photos: always return relative URL (/media/photos/...) so frontend
+        # can load from same origin (avoids backend:8000 or wrong host in Docker).
+        for photo in instance.photos.all():
+            url = (photo.image.url or '').strip()
+            result.append({'name': photo.name or '', 'url': url})
+        # Legacy external links from JSONB (e.g. not yet migrated or failed to import)
+        raw = instance.equipment_imagelinks or []
+        if isinstance(raw, list):
+            for item in raw:
+                if isinstance(item, dict) and item.get('url'):
+                    result.append({
+                        'name': item.get('name', ''),
+                        'url': LinkConverterService.get_direct_link(item['url'])
+                    })
+                elif isinstance(item, str) and item.strip():
+                    result.append({
+                        'name': '',
+                        'url': LinkConverterService.get_direct_link(item)
+                    })
+        elif isinstance(raw, str):
+            for link in (x.strip() for x in raw.split(',') if x.strip()):
+                result.append({'name': '', 'url': LinkConverterService.get_direct_link(link)})
+        return result
+
+    def to_representation(self, instance):
+        """
+        Return equipment_imagelinks from local EquipmentPhoto first, then legacy JSONB.
+        Local URLs (/media/photos/...) are stable for constructor and PDF.
+        """
+        data = super().to_representation(instance)
+        data['equipment_imagelinks'] = self._build_equipment_imagelinks_response(instance)
+        return data
     
     def create(self, validated_data):
         """Create equipment with Many-to-Many relationships."""
@@ -314,6 +387,11 @@ class EquipmentSerializer(serializers.ModelSerializer):
         import logging
         logger = logging.getLogger(__name__)
         
+        # Обрабатываем ссылки на изображения: импорт из облака в EquipmentPhoto, в JSONB только неудачные/не-облако
+        imagelinks_in = validated_data.pop('equipment_imagelinks', None)
+        if imagelinks_in is not None:
+            validated_data['equipment_imagelinks'] = []  # set below after create
+
         # Извлекаем Many-to-Many данные
         categories = validated_data.pop('categories', [])
         manufacturers = validated_data.pop('manufacturers', [])
@@ -326,6 +404,11 @@ class EquipmentSerializer(serializers.ModelSerializer):
         try:
             with transaction.atomic():
                 equipment = Equipment.objects.create(**validated_data)
+                if imagelinks_in is not None:
+                    equipment.equipment_imagelinks = self._import_imagelinks_and_storage_failures(
+                        equipment, imagelinks_in
+                    )
+                    equipment.save(update_fields=['equipment_imagelinks'])
                 logger.info(f"Equipment created with ID: {equipment.equipment_id}")
                 
                 # Устанавливаем Many-to-Many связи
@@ -356,8 +439,50 @@ class EquipmentSerializer(serializers.ModelSerializer):
             logger.error(f"Validated data: {validated_data}")
             raise
     
+    def _import_imagelinks_and_storage_failures(self, equipment, imagelinks_in):
+        """
+        For each external URL (Google/Yandex), import and create EquipmentPhoto.
+        Return list for equipment_imagelinks JSONB: only failed external + non-cloud links (normalized).
+        """
+        stored = []
+        items = []
+        if isinstance(imagelinks_in, list):
+            items = [(i, x) for i, x in enumerate(imagelinks_in)]
+        elif isinstance(imagelinks_in, str):
+            items = [(i, link.strip()) for i, link in enumerate(imagelinks_in.split(',')) if link and link.strip()]
+        for idx, item in items:
+            name = ''
+            url = None
+            if isinstance(item, dict):
+                url = item.get('url')
+                name = item.get('name', '') or ''
+            elif isinstance(item, str):
+                url = item
+            if not url or not str(url).strip():
+                continue
+            url = str(url).strip()
+            # Already local
+            if url.startswith('/') or (settings.MEDIA_URL and url.startswith(settings.MEDIA_URL)):
+                stored.append({'name': name, 'url': url})
+                continue
+            if CloudImageImportService.detect_source(url):
+                photo = CloudImageImportService.import_and_save(equipment, url, name=name, sort_order=idx)
+                if not photo:
+                    stored.append({'name': name, 'url': LinkConverterService.get_direct_link(url)})
+            else:
+                stored.append({'name': name, 'url': LinkConverterService.get_direct_link(url)})
+        return stored
+
     def update(self, instance, validated_data):
         """Update equipment with Many-to-Many relationships."""
+        imagelinks_in = validated_data.pop('equipment_imagelinks', None)
+        if imagelinks_in is not None:
+            # Replace local photos: delete existing and re-import from list so order/set matches
+            instance.photos.all().delete()
+            instance.equipment_imagelinks = self._import_imagelinks_and_storage_failures(
+                instance, imagelinks_in
+            )
+
         # Извлекаем Many-to-Many данные
         categories = validated_data.pop('categories', None)
         manufacturers = validated_data.pop('manufacturers', None)
@@ -1371,6 +1496,9 @@ class ProposalTemplateSerializer(serializers.ModelSerializer):
                                 merged_item['margin_percentage'] = fresh_map[eq_id]['margin_percentage']
                             if 'purchase_price_kzt' in fresh_map[eq_id]:
                                 merged_item['purchase_price_kzt'] = fresh_map[eq_id]['purchase_price_kzt']
+                            # Always refresh images from fresh data so new photos appear in constructor/KP
+                            if 'images' in fresh_map[eq_id]:
+                                merged_item['images'] = fresh_map[eq_id]['images']
                             merged_list.append(merged_item)
                         else:
                             # If not in fresh, keep constructor item as-is

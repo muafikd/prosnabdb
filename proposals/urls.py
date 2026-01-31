@@ -119,7 +119,8 @@ urlpatterns = [
     # Include router URLs for ViewSets (automatically registers all actions)
     path('', include(router.urls)),
     path('system-settings/logo/', views.SystemSettingsLogoView.as_view(), name='system-settings-logo'),
-    
+    path('proxy-image/', views.ImageProxyView.as_view(), name='proxy-image'),
+
     # Dashboard stats endpoint
     path('dashboard/stats/', views.DashboardStatsView.as_view(), name='dashboard-stats'),
     path('dashboard/active-proposals/', views.DashboardActiveProposalsView.as_view(), name='dashboard-active-proposals'),

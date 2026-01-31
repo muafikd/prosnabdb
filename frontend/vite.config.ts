@@ -21,7 +21,13 @@ export default defineConfig({
         target: 'http://127.0.0.1:8002',
         changeOrigin: true,
         secure: false,
-      }
+      },
+      // Медиа-файлы (фото оборудования) — с бэкенда; иначе при dev (localhost:5173) картинки не грузятся
+      '/media': {
+        target: 'http://127.0.0.1:8002',
+        changeOrigin: true,
+        secure: false,
+      },
     }
   },
 })

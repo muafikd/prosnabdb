@@ -1,9 +1,19 @@
 version: '3.8'
 
 # Docker Compose конфигурация для Coolify Platform
-# Оптимизировано для постепенного развертывания и снижения нагрузки на сервер
-# Coolify автоматически создает сеть для стека, поэтому явное определение networks не требуется
-# Все переменные окружения должны быть объявлены здесь для отображения в Coolify UI
+#
+# Итоговая архитектура (только frontend публичен):
+#   Internet
+#      ↓
+#   Traefik (80 / 443)  ← управляется Coolify
+#      ↓
+#   frontend (PUBLIC)   ← в Coolify привязать домен только к этому сервису
+#      ↓
+#   backend (PRIVATE)   ← доступен только из frontend по имени backend:8000
+#      ↓
+#   postgres / redis (PRIVATE)
+#
+# Все переменные окружения объявлены здесь для отображения в Coolify UI.
 
 services:
   postgres:
@@ -85,9 +95,9 @@ services:
     volumes:
       - media_volume:/app/media
       - static_volume:/app/staticfiles
-    # Порт для прямого доступа (опционально, можно использовать домен через Coolify)
-    ports:
-      - "${BACKEND_PORT:-8008}:8000"
+    # PRIVATE: порт только внутри сети, доступ с frontend по backend:8000
+    expose:
+      - "8000"
     environment:
       - DATABASE_HOST=postgres
       - DATABASE_NAME=${DATABASE_NAME:-prosnab_db}
@@ -129,7 +139,7 @@ services:
         window: 120s
     labels:
       - "coolify.managed=true"
-      # Можно добавить домен через Coolify UI для этого сервиса
+      # Домен НЕ привязывать — backend только для внутреннего доступа с frontend
 
   worker:
     build:
@@ -180,8 +190,9 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
     container_name: ${COMPOSE_PROJECT_NAME:-prosnab}_frontend
-    ports:
-      - "${FRONTEND_PORT:-3008}:80"
+    # PUBLIC: единственный сервис с публичным доступом — в Coolify привязать домен к frontend
+    expose:
+      - "80"
     volumes:
       - media_volume:/app/media
       - static_volume:/app/staticfiles
@@ -211,7 +222,7 @@ services:
         window: 120s
     labels:
       - "coolify.managed=true"
-      # Можно добавить домен через Coolify UI для этого сервиса
+      # Единственная точка входа: в Coolify привязать домен к этому сервису (Traefik → frontend:80)
 
 volumes:
   postgres_data:

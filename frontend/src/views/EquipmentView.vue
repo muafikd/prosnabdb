@@ -179,12 +179,22 @@
             class="equipment-card"
           >
             <div class="card-image">
-                <img
-                  v-if="getFirstImage(item.equipment_imagelinks)"
-                  :src="getFirstImage(item.equipment_imagelinks)"
-                  :alt="item.equipment_name"
-                  @error="handleImageError"
-                />
+                <template v-if="getFirstImage(item.equipment_imagelinks)">
+                  <div
+                    v-show="!cardImageLoaded[item.equipment_id]"
+                    class="image-loading"
+                  >
+                    <el-icon class="is-loading" :size="32"><Loading /></el-icon>
+                    <span>Загрузка...</span>
+                  </div>
+                  <img
+                    :src="getImageSrc(getFirstImage(item.equipment_imagelinks))"
+                    :alt="item.equipment_name"
+                    :class="{ 'image-loaded': cardImageLoaded[item.equipment_id] }"
+                    @load="onCardImageLoad(item.equipment_id)"
+                    @error="handleImageError"
+                  />
+                </template>
               <div v-else class="no-image">
                 <el-icon :size="48"><Picture /></el-icon>
                 <span>Нет изображения</span>
@@ -276,7 +286,7 @@
     <!-- Модальное окно создания/редактирования -->
     <el-dialog
       v-model="dialogVisible"
-      :title="isEditMode ? 'Редактировать оборудование' : 'Создать оборудование'"
+      :title="isEditMode ? 'Редактировать оборудование: ' + (formData.equipment_name || 'без названия') : 'Создать оборудование'"
       width="900px"
       @close="handleDialogClose"
     >
@@ -953,7 +963,7 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted, computed } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
-import { Plus, Edit, Delete, Search, List, Grid, Picture, Link, Document } from '@element-plus/icons-vue'
+import { Plus, Edit, Delete, Search, List, Grid, Picture, Link, Document, Loading } from '@element-plus/icons-vue'
 import {
   equipmentAPI,
   categoriesAPI,
@@ -978,6 +988,7 @@ import {
 } from '@/api/equipment'
 import { format } from 'date-fns'
 import { formatPrice, inputFormatter, inputParser } from '@/utils/formatters'
+import { getImageSrc } from '@/utils/imageProxy'
 import { useExchangeRateStore } from '@/stores/exchangeRate'
 import { exchangeRatesAPI } from '@/api/exchangeRates'
 
@@ -998,6 +1009,8 @@ const currentEquipmentId = ref<number | null>(null)
 const activeTab = ref('basic')
 const formRef = ref<FormInstance>()
 const viewMode = ref<'table' | 'grid'>('table')
+// Карточки: картинка загружена (скрываем плейсхолдер)
+const cardImageLoaded = ref<Record<number, boolean>>({})
 
 // Exchange rate store
 const exchangeRateStore = useExchangeRateStore()
@@ -2217,6 +2230,10 @@ const truncateText = (text: string, maxLength: number): string => {
   return text.substring(0, maxLength) + '...'
 }
 
+const onCardImageLoad = (equipmentId: number) => {
+  cardImageLoaded.value[equipmentId] = true
+}
+
 const handleImageError = (event: Event) => {
   const target = event.target as HTMLImageElement
   target.style.display = 'none'
@@ -2357,10 +2374,37 @@ onMounted(async () => {
   overflow: hidden;
 }
 
+.card-image .image-loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: #909399;
+  font-size: 13px;
+  background: #f5f7fa;
+}
+
+.card-image .image-loading .is-loading {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
 .card-image img {
   width: 100%;
   height: 100%;
   object-fit: cover;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.card-image img.image-loaded {
+  opacity: 1;
 }
 
 .card-image .no-image {

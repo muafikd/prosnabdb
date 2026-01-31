@@ -1,6 +1,7 @@
 from rest_framework import status, generics, permissions, serializers, viewsets
 from django.views.decorators.csrf import csrf_exempt
 from django.conf import settings
+from django.http import HttpResponse
 from rest_framework.views import APIView
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
@@ -53,6 +54,8 @@ from core.services.exchange_rate_service import ExchangeRateService
 from .permissions import IsManagerOrAdmin, IsAdmin
 from .tasks import generate_pdf_task
 from celery.result import AsyncResult
+import requests
+from urllib.parse import urlparse
 
 
 class UserRegistrationView(generics.CreateAPIView):
@@ -555,7 +558,7 @@ class EquipmentListView(generics.ListCreateAPIView):
         """Return all equipment, optionally filtered by search or filters."""
         queryset = Equipment.objects.prefetch_related(
             'categories', 'manufacturers', 'equipment_types',
-            'details', 'specifications', 'tech_processes'
+            'details', 'specifications', 'tech_processes', 'photos'
         ).all()
         
         # Optional search by equipment name or articule
@@ -602,7 +605,7 @@ class EquipmentDetailView(generics.RetrieveUpdateDestroyAPIView):
     """
     queryset = Equipment.objects.prefetch_related(
         'categories', 'manufacturers', 'equipment_types',
-        'details', 'specifications', 'tech_processes'
+        'details', 'specifications', 'tech_processes', 'photos'
     ).all()
     serializer_class = EquipmentSerializer
     permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
@@ -2773,23 +2776,42 @@ class ProposalTemplateViewSet(viewsets.ModelViewSet):
         return data
 
     def _get_equipment_spec_data(self, proposal, doc_template):
+        import os
         from docxtpl import InlineImage
         from docx.shared import Mm
         import requests
         import io
+        from django.conf import settings
 
         data = []
         for eq_list in proposal.equipment_lists.all():
             for item in eq_list.equipment_items_relation.all():
                 equipment = item.equipment
                 specs = equipment.specifications.all()
-                
                 images = []
-                if equipment.equipment_imagelinks:
-                    links = [link.strip() for link in equipment.equipment_imagelinks.split(',') if link.strip()]
-                    for link in links:
+                # Local photos (EquipmentPhoto) first
+                for photo in equipment.photos.all().order_by('sort_order', 'pk'):
+                    if photo.image:
                         try:
-                            # Verify if link is valid URL first
+                            path = getattr(photo.image, 'path', None) or os.path.join(settings.MEDIA_ROOT, photo.image.name)
+                            with open(path, 'rb') as f:
+                                img = InlineImage(doc_template, io.BytesIO(f.read()), width=Mm(50))
+                                images.append(img)
+                        except Exception as e:
+                            print(f"Error loading local image {photo.image.name}: {e}")
+                # Legacy equipment_imagelinks (list or comma string)
+                imagelinks = equipment.equipment_imagelinks
+                if imagelinks:
+                    links = []
+                    if isinstance(imagelinks, list):
+                        for x in imagelinks:
+                            links.append(x.get('url', x) if isinstance(x, dict) else x)
+                    elif isinstance(imagelinks, str):
+                        links = [link.strip() for link in imagelinks.split(',') if link.strip()]
+                    for link in links:
+                        if not link:
+                            continue
+                        try:
                             if link.startswith('http'):
                                 response = requests.get(link, timeout=5)
                                 if response.status_code == 200:
@@ -2798,7 +2820,6 @@ class ProposalTemplateViewSet(viewsets.ModelViewSet):
                                     images.append(img)
                         except Exception as e:
                             print(f"Error loading image {link}: {e}")
-
                 data.append({
                     'name': equipment.equipment_name,
                     'params': [{'name': s.spec_parameter_name, 'value': s.spec_parameter_value} for s in specs],
@@ -2890,6 +2911,58 @@ class SystemSettingsLogoView(APIView):
         settings.save()
         
         return Response({'url': settings.company_logo.url}, status=status.HTTP_200_OK)
+
+
+# Allowed hosts for image proxy (Google Drive, Yandex Disk) to avoid 403 when embedding
+IMAGE_PROXY_ALLOWED_NETLOCS = frozenset([
+    'drive.google.com',
+    'www.drive.google.com',
+    'lh3.googleusercontent.com',
+    'lh4.googleusercontent.com',
+    'lh5.googleusercontent.com',
+    'lh6.googleusercontent.com',
+    'disk.yandex.ru',
+    'disk.yandex.com',
+    'yadi.sk',
+])
+
+
+class ImageProxyView(APIView):
+    """
+    Proxy for external images (Google Drive, Yandex Disk) to avoid 403 when
+    loading in <img> from our frontend (Google blocks by Referer).
+    GET /api/proxy-image/?url=ENCODED_IMAGE_URL
+    AllowAny so <img src> works without sending JWT (allowlist restricts hosts).
+    """
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request):
+        url = request.query_params.get('url')
+        if not url:
+            return Response({'error': 'Missing url parameter'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            parsed = urlparse(url)
+            if not parsed.scheme or not parsed.netloc:
+                return Response({'error': 'Invalid url'}, status=status.HTTP_400_BAD_REQUEST)
+            if parsed.netloc.lower() not in IMAGE_PROXY_ALLOWED_NETLOCS:
+                return Response({'error': 'URL host not allowed for proxy'}, status=status.HTTP_403_FORBIDDEN)
+        except Exception:
+            return Response({'error': 'Invalid url'}, status=status.HTTP_400_BAD_REQUEST)
+
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; rv:91.0) Gecko/20100101 Firefox/91.0',
+            'Referer': 'https://drive.google.com/',
+        }
+        try:
+            r = requests.get(url, headers=headers, timeout=25, stream=True)
+            r.raise_for_status()
+            content_type = r.headers.get('Content-Type', 'application/octet-stream')
+            # Only allow image types
+            if 'image/' not in content_type and content_type not in ('application/octet-stream',):
+                return Response({'error': 'Not an image'}, status=status.HTTP_400_BAD_REQUEST)
+            return HttpResponse(r.content, content_type=content_type)
+        except requests.RequestException as e:
+            return Response({'error': str(e)}, status=status.HTTP_502_BAD_GATEWAY)
 
 
 class DashboardStatsView(APIView):

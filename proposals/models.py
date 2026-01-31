@@ -1,6 +1,13 @@
+import uuid
 from django.db import models
 from django.contrib.auth.models import AbstractBaseUser, PermissionsMixin, BaseUserManager
 from django.utils import timezone
+
+
+def equipment_photo_upload_to(instance, filename):
+    """Store equipment photos as photos/<uuid>.jpg for predictable paths and no collisions."""
+    ext = 'jpg'
+    return f"photos/{uuid.uuid4().hex}.{ext}"
 
 
 class UserManager(BaseUserManager):
@@ -297,6 +304,33 @@ class Equipment(models.Model):
     
     def __str__(self):
         return self.equipment_name or f"Equipment {self.equipment_id}"
+
+
+class EquipmentPhoto(models.Model):
+    """Locally stored photo for equipment (downloaded from cloud links and optimized)."""
+    equipment = models.ForeignKey(
+        Equipment,
+        on_delete=models.CASCADE,
+        related_name='photos',
+        db_column='equipment_id',
+        verbose_name='Оборудование'
+    )
+    image = models.ImageField(
+        upload_to=equipment_photo_upload_to,
+        verbose_name='Фото',
+        max_length=255
+    )
+    name = models.CharField(max_length=255, blank=True, verbose_name='Подпись')
+    sort_order = models.PositiveIntegerField(default=0, verbose_name='Порядок')
+
+    class Meta:
+        db_table = 'equipment_photo'
+        verbose_name = 'Фото оборудования'
+        verbose_name_plural = 'Фото оборудования'
+        ordering = ['sort_order', 'pk']
+
+    def __str__(self):
+        return f"Photo {self.pk} for {self.equipment_id}"
 
 
 class PurchasePrice(models.Model):

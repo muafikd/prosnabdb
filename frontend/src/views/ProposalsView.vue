@@ -777,7 +777,7 @@
           <div style="display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px;">
             <div v-for="(img, idx) in currentEquipmentCard.equipment_imagelinks" :key="idx" style="position: relative;">
               <el-image
-                :src="typeof img === 'string' ? img : img.url"
+                :src="getImageSrc(typeof img === 'string' ? img : img.url)"
                 :alt="typeof img === 'object' ? img.name : ''"
                 style="width: 150px; height: 150px; object-fit: cover; border-radius: 4px;"
                 :preview-src-list="getImagePreviewList()"
@@ -969,6 +969,7 @@ import { equipmentListItemsAPI } from '@/api/proposals'
 import { clientsAPI, type Client } from '@/api/clients'
 import { equipmentAPI, type Equipment } from '@/api/equipment'
 import { formatPrice } from '@/utils/formatters'
+import { getImageSrc } from '@/utils/imageProxy'
 import { format } from 'date-fns'
 import { useAuthStore } from '@/stores/auth' // Import auth store
 
@@ -2162,11 +2163,11 @@ const closeEquipmentCardDialog = () => {
     currentEquipmentCard.value = null
 }
 
-// Get image preview list for el-image component
+// Get image preview list for el-image component (use proxy for Drive/Yandex to avoid 403)
 const getImagePreviewList = (): string[] => {
     if (!currentEquipmentCard.value?.equipment_imagelinks) return []
     return currentEquipmentCard.value.equipment_imagelinks.map((img: any) => 
-        typeof img === 'string' ? img : img.url
+        getImageSrc(typeof img === 'string' ? img : img.url)
     ).filter(Boolean)
 }
 

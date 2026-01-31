@@ -6,14 +6,21 @@ from django.utils import timezone
 from django.conf import settings
 from django.db import transaction
 from .models import (
-    Equipment, PurchasePrice, Logistics, AdditionalPrices, ExchangeRate,
+    Equipment, EquipmentPhoto, PurchasePrice, Logistics, AdditionalPrices, ExchangeRate,
     CostCalculation, CommercialProposal, SystemSettings
 )
 import requests
 import re
 import os
+from io import BytesIO
 from django.core.cache import cache
+from django.core.files.base import ContentFile
 import logging
+
+try:
+    from PIL import Image
+except ImportError:
+    Image = None
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +95,159 @@ class LinkConverterService:
             logger.warning(f"Failed to convert Yandex Disk link {url}: {e}")
             
         return url
+
+
+# Max dimension for optimized equipment photos (saves SSD space)
+EQUIPMENT_PHOTO_MAX_PX = 1600
+EQUIPMENT_PHOTO_JPEG_QUALITY = 85
+
+
+class CloudImageImportService:
+    """
+    Service for downloading images from Google Drive / Yandex Disk,
+    optimizing them (resize, JPEG) and storing locally in EquipmentPhoto.
+    """
+    SOURCE_GOOGLE = 'google'
+    SOURCE_YANDEX = 'yandex'
+
+    @staticmethod
+    def detect_source(url):
+        """Determine cloud source from URL. Returns SOURCE_GOOGLE, SOURCE_YANDEX, or None."""
+        if not url or not isinstance(url, str):
+            return None
+        url = url.strip()
+        if 'drive.google.com' in url:
+            return CloudImageImportService.SOURCE_GOOGLE
+        if 'disk.yandex' in url or 'yadi.sk' in url:
+            return CloudImageImportService.SOURCE_YANDEX
+        return None
+
+    @staticmethod
+    def _extract_google_file_id(url):
+        """Extract Google Drive file ID from URL."""
+        match = re.search(r'/file/d/([a-zA-Z0-9_-]+)', url)
+        if match:
+            return match.group(1)
+        match = re.search(r'[?&]id=([a-zA-Z0-9_-]+)', url)
+        if match:
+            return match.group(1)
+        return None
+
+    @staticmethod
+    def get_download_url(url):
+        """
+        Get direct download URL for the given cloud link.
+        Google: /uc?export=download&id=FILE_ID
+        Yandex: API public/resources/download -> href
+        """
+        if not url:
+            return None
+        url = url.strip()
+        if CloudImageImportService.detect_source(url) == CloudImageImportService.SOURCE_GOOGLE:
+            file_id = CloudImageImportService._extract_google_file_id(url)
+            if file_id:
+                return f"https://drive.google.com/uc?export=download&id={file_id}"
+            return None
+        if CloudImageImportService.detect_source(url) == CloudImageImportService.SOURCE_YANDEX:
+            try:
+                api_url = "https://cloud-api.yandex.net/v1/disk/public/resources/download"
+                resp = requests.get(api_url, params={'public_key': url}, timeout=10)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    href = data.get('href')
+                    if href:
+                        return href
+            except Exception as e:
+                logger.warning("Yandex download URL failed for %s: %s", url[:80], e)
+            return None
+        return url
+
+    @staticmethod
+    def download_bytes(url, timeout=30):
+        """Download image bytes from URL. Returns bytes or None."""
+        if not url:
+            return None
+        try:
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (compatible; ProsnabDB/1.0)',
+            }
+            resp = requests.get(url, headers=headers, timeout=timeout, stream=True)
+            resp.raise_for_status()
+            # Google Drive may return HTML confirmation for large files; try to get direct link
+            if 'drive.google.com' in url and 'text/html' in resp.headers.get('Content-Type', ''):
+                # Try to extract confirm token and re-request
+                match = re.search(r'confirm=([0-9A-Za-z_-]+)', resp.text)
+                if match:
+                    confirm = match.group(1)
+                    download_url = url if '?' in url else f"{url}&confirm={confirm}"
+                    resp = requests.get(download_url, headers=headers, timeout=timeout)
+                    resp.raise_for_status()
+            return resp.content
+        except Exception as e:
+            logger.warning("Download failed for %s: %s", url[:80], e)
+            return None
+
+    @staticmethod
+    def optimize_image(raw_bytes):
+        """
+        Resize image so longest side is EQUIPMENT_PHOTO_MAX_PX and save as JPEG quality 85.
+        Returns JPEG bytes or None.
+        """
+        if not Image or not raw_bytes:
+            return raw_bytes
+        try:
+            img = Image.open(BytesIO(raw_bytes))
+            if img.mode in ('RGBA', 'P'):
+                img = img.convert('RGB')
+            elif img.mode != 'RGB':
+                img = img.convert('RGB')
+            w, h = img.size
+            if w > EQUIPMENT_PHOTO_MAX_PX or h > EQUIPMENT_PHOTO_MAX_PX:
+                if w >= h:
+                    new_w = EQUIPMENT_PHOTO_MAX_PX
+                    new_h = int(h * EQUIPMENT_PHOTO_MAX_PX / w)
+                else:
+                    new_h = EQUIPMENT_PHOTO_MAX_PX
+                    new_w = int(w * EQUIPMENT_PHOTO_MAX_PX / h)
+                img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+            out = BytesIO()
+            img.save(out, format='JPEG', quality=EQUIPMENT_PHOTO_JPEG_QUALITY, optimize=True)
+            return out.getvalue()
+        except Exception as e:
+            logger.warning("Optimize image failed: %s", e)
+            return raw_bytes
+
+    @staticmethod
+    def import_and_save(equipment, url, name='', sort_order=0):
+        """
+        Download image from URL (Google/Yandex), optimize and save as EquipmentPhoto.
+        Returns EquipmentPhoto instance or None on failure.
+        """
+        if not equipment or not url:
+            return None
+        url = url.strip()
+        download_url = CloudImageImportService.get_download_url(url)
+        if not download_url:
+            # Not a supported cloud link; could be already local /media/...
+            return None
+        raw = CloudImageImportService.download_bytes(download_url)
+        if not raw:
+            return None
+        jpeg_bytes = CloudImageImportService.optimize_image(raw)
+        if not jpeg_bytes:
+            return None
+        try:
+            photo = EquipmentPhoto(equipment=equipment, name=name or '', sort_order=sort_order)
+            photo.image.save(
+                f"{__import__('uuid').uuid4().hex}.jpg",
+                ContentFile(jpeg_bytes),
+                save=True
+            )
+            return photo
+        except Exception as e:
+            logger.warning("Save EquipmentPhoto failed for equipment %s: %s", equipment.equipment_id, e)
+            return None
+
 
 class CostCalculationService:
     """Service for calculating equipment cost."""
@@ -887,7 +1047,7 @@ class DataAggregatorService:
         
         # Step 1: Collect all equipment items and calculate base costs
         for eq_list in self.proposal.equipment_lists.all():
-            for item in eq_list.equipment_items_relation.select_related('equipment').all().order_by('order', 'created_at'):
+            for item in eq_list.equipment_items_relation.select_related('equipment').prefetch_related('equipment__photos').all().order_by('order', 'created_at'):
                 equipment = item.equipment
                 quantity = Decimal(item.quantity)
                 
@@ -1142,7 +1302,7 @@ class DataAggregatorService:
                 "margin_percentage": float(margin_percentage),  # Margin percentage or saved value
                 "margin_kzt_total": float(margin_kzt_total),  # Total margin for line (in KZT)
                 "purchase_price_kzt": float(purchase_price_kzt),  # Purchase price in KZT (before row expenses)
-                "images": self._process_images(equipment.equipment_imagelinks)
+                "images": self._process_images_for_equipment(equipment)
             })
         
         return final_items
@@ -1175,7 +1335,7 @@ class DataAggregatorService:
         """Get equipment details for ALL equipment in proposal, even if empty."""
         data = {}
         for eq_list in self.proposal.equipment_lists.all():
-            for item in eq_list.equipment_items_relation.select_related('equipment').all().order_by('order', 'created_at'):
+            for item in eq_list.equipment_items_relation.select_related('equipment').prefetch_related('equipment__photos').all().order_by('order', 'created_at'):
                 equipment = item.equipment
                 details = equipment.details.all()
                 # Always include equipment, even if no details (empty list)
@@ -1189,7 +1349,7 @@ class DataAggregatorService:
         """Get equipment specifications for ALL equipment in proposal, even if empty."""
         data = {}
         for eq_list in self.proposal.equipment_lists.all():
-            for item in eq_list.equipment_items_relation.select_related('equipment').all().order_by('order', 'created_at'):
+            for item in eq_list.equipment_items_relation.select_related('equipment').prefetch_related('equipment__photos').all().order_by('order', 'created_at'):
                 equipment = item.equipment
                 specs = equipment.specifications.all()
                 # Always include equipment, even if no specs (empty list)
@@ -1203,7 +1363,7 @@ class DataAggregatorService:
         """Get tech processes for ALL equipment in proposal, even if empty."""
         data = {}
         for eq_list in self.proposal.equipment_lists.all():
-            for item in eq_list.equipment_items_relation.select_related('equipment').all().order_by('order', 'created_at'):
+            for item in eq_list.equipment_items_relation.select_related('equipment').prefetch_related('equipment__photos').all().order_by('order', 'created_at'):
                 equipment = item.equipment
                 procs = equipment.tech_processes.all()
                 # Always include equipment, even if no processes (empty list)
@@ -1213,14 +1373,44 @@ class DataAggregatorService:
                 ]
         return data
 
+    def _process_images_for_equipment(self, equipment):
+        """
+        Build images list for equipment: local EquipmentPhoto first (stable /media/photos/ URLs),
+        then legacy equipment_imagelinks (external, direct link). Used in data_package and PDF/DOCX.
+        """
+        result = []
+        for photo in equipment.photos.all().order_by('sort_order', 'pk'):
+            url = photo.image.url if photo.image else ''
+            if url:
+                result.append({'name': photo.name or '', 'url': url})
+        imagelinks = equipment.equipment_imagelinks
+        if not imagelinks:
+            return result
+        if isinstance(imagelinks, list):
+            for item in imagelinks:
+                if isinstance(item, dict):
+                    name = item.get('name', '')
+                    url = item.get('url')
+                    if url:
+                        direct_url = LinkConverterService.get_direct_link(url)
+                        result.append({'name': name, 'url': direct_url})
+                elif isinstance(item, str):
+                    direct_url = LinkConverterService.get_direct_link(item)
+                    result.append({'name': '', 'url': direct_url})
+        elif isinstance(imagelinks, str):
+            links = [link.strip() for link in imagelinks.split(',') if link.strip()]
+            for link in links:
+                direct_url = LinkConverterService.get_direct_link(link)
+                result.append({'name': '', 'url': direct_url})
+        return result
+
     def _process_images(self, imagelinks):
         """
         Parses image links field. Returns list of dicts with 'name' and 'url'.
-        If input is a list of strings, it treats them as URLs with empty names.
+        Kept for backward compatibility when equipment is not available.
         """
         if not imagelinks:
             return []
-        
         result = []
         if isinstance(imagelinks, list):
             for item in imagelinks:
@@ -1234,12 +1424,10 @@ class DataAggregatorService:
                     direct_url = LinkConverterService.get_direct_link(item)
                     result.append({'name': '', 'url': direct_url})
         elif isinstance(imagelinks, str):
-            # Handle legacy comma string just in case
             links = [link.strip() for link in imagelinks.split(',') if link.strip()]
             for link in links:
                 direct_url = LinkConverterService.get_direct_link(link)
                 result.append({'name': '', 'url': direct_url})
-            
         return result
 
 
@@ -1287,6 +1475,9 @@ class ExportService:
                             merged_item['margin_percentage'] = fresh_map[eq_id]['margin_percentage']
                         if 'purchase_price_kzt' in fresh_map[eq_id]:
                             merged_item['purchase_price_kzt'] = fresh_map[eq_id]['purchase_price_kzt']
+                        # Always refresh images from fresh data so new photos appear in exports
+                        if 'images' in fresh_map[eq_id]:
+                            merged_item['images'] = fresh_map[eq_id]['images']
                         # Ensure unit field is present
                         if 'unit' not in merged_item or not merged_item.get('unit'):
                             merged_item['unit'] = fresh_map[eq_id].get('unit', 'шт')

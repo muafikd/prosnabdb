@@ -11,7 +11,7 @@
           <tr v-for="row in chunkImages(item.images)" :key="row.map(img => img.url).join('')">
             <td v-for="(img, imgIndex) in row" :key="imgIndex" class="photo-cell">
               <div v-if="img && img.url" class="photo-wrapper">
-                <img :src="img.url" class="equipment-photo" @error="handleImageError" />
+                <img :src="getImageSrc(img.url)" class="equipment-photo" @error="handleImageError" />
                 <div v-if="img.name" class="photo-caption">{{ img.name }}</div>
               </div>
             </td>
@@ -26,6 +26,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
+import { getImageSrc } from '@/utils/imageProxy'
 
 const props = defineProps<{
   dataPackage: any
