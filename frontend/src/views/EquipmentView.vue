@@ -236,10 +236,11 @@
                     {{ item.manufacturers.map(id => getManufacturerName(id)).join(', ') }}
                   </span>
                 </div>
-                <div class="card-price" v-if="item.equipment_manufacture_price">
-                  <span class="price-value">
-                    {{ formatPrice(item.equipment_manufacture_price, item.equipment_price_currency_type || 'KZT') }}
+                <div class="card-price">
+                  <span class="price-value" v-if="item.sale_price_kzt !== null && item.sale_price_kzt !== undefined && item.sale_price_kzt !== ''">
+                    {{ formatPrice(item.sale_price_kzt, 'KZT') }}
                   </span>
+                  <span class="price-value price-empty" v-else>—</span>
                 </div>
                 <div class="card-description" v-if="item.equipment_short_description">
                   <p>{{ truncateText(item.equipment_short_description, 100) }}</p>
@@ -2683,6 +2684,11 @@ onMounted(async () => {
   font-size: 20px;
   font-weight: 700;
   color: #409eff;
+}
+
+.price-value.price-empty {
+  font-weight: 400;
+  color: #909399;
 }
 
 .price-currency {
