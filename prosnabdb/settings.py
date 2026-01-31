@@ -231,6 +231,8 @@ CORS_ALLOWED_ORIGINS = [
     "http://127.0.0.1:5173",
     "http://localhost:3006",
     "http://127.0.0.1:3006",
+    "https://kp.mevent.kz",
+    "http://kp.mevent.kz",
 ]
 
 CORS_ALLOW_CREDENTIALS = True
@@ -238,6 +240,8 @@ CORS_ALLOW_CREDENTIALS = True
 CSRF_TRUSTED_ORIGINS = [
     "http://localhost:3006",
     "http://127.0.0.1:3006",
+    "https://kp.mevent.kz",
+    "http://kp.mevent.kz",
 ]
 
 # Custom User Model
