@@ -613,7 +613,18 @@
                 
                 <el-table :data="formData.equipment_imagelinks || []" border style="width: 100%">
                   <el-table-column prop="name" label="Название" min-width="150" />
-                  <el-table-column prop="url" label="Ссылка" min-width="250" show-overflow-tooltip />
+                  <el-table-column label="Ссылка" min-width="250">
+                    <template #default="{ row }">
+                      <a
+                        v-if="row.url"
+                        :href="row.url"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        class="media-link"
+                      >{{ row.url }}</a>
+                      <span v-else class="text-muted">—</span>
+                    </template>
+                  </el-table-column>
                   <el-table-column label="Действия" width="120" align="center">
                     <template #default="{ $index }">
                       <div style="display: flex; gap: 5px; justify-content: center">
@@ -643,8 +654,21 @@
                 v-model="formData.equipment_videolinks"
                 type="textarea"
                 :rows="4"
-                placeholder="Введите ссылки на видео (каждая с новой строки)"
+                placeholder="Введите ссылки на видео (каждая с новой строки). Можно вставить несколько ссылок."
               />
+              <div v-if="videoLinksList.length > 0" class="video-links-preview">
+                <span class="label">Открыть:</span>
+                <div class="video-links-list">
+                  <a
+                    v-for="(link, idx) in videoLinksList"
+                    :key="idx"
+                    :href="link"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    class="media-link"
+                  >Видео {{ idx + 1 }}</a>
+                </div>
+              </div>
             </el-form-item>
           </el-form>
         </el-tab-pane>
@@ -1115,6 +1139,12 @@ const availableCountries = computed(() => {
     countries.add(formData.equipment_madein_country)
   }
   return Array.from(countries).sort()
+})
+
+// Список ссылок на видео из текстового поля (каждая строка — одна ссылка)
+const videoLinksList = computed(() => {
+  const raw = formData.equipment_videolinks || ''
+  return raw.split(/\r?\n/).map(s => s.trim()).filter(Boolean)
 })
 
 const filters = reactive({
@@ -2710,6 +2740,39 @@ onMounted(async () => {
   display: -webkit-box;
   -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
+}
+
+.media-link {
+  color: #409eff;
+  text-decoration: none;
+  word-break: break-all;
+}
+.media-link:hover {
+  text-decoration: underline;
+}
+
+.video-links-preview {
+  margin-top: 10px;
+  font-size: 14px;
+}
+.video-links-preview .label {
+  color: #909399;
+  margin-right: 8px;
+}
+.video-links-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 6px;
+}
+.video-links-list .media-link {
+  display: inline-block;
+  padding: 4px 10px;
+  background: #ecf5ff;
+  border-radius: 4px;
+}
+.text-muted {
+  color: #909399;
 }
 
 .card-actions {
