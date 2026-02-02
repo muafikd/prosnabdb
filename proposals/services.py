@@ -1738,18 +1738,35 @@ class ExportService:
         </table>
         """
 
+    def _resolve_image_path_for_pdf(self, url):
+        """Convert image URL to path suitable for WeasyPrint (file:// for local, URL for http)."""
+        if not url:
+            return ''
+        img_path = url
+        if url.startswith('/media/'):
+            media_rel = url[len(settings.MEDIA_URL):] if url.startswith(settings.MEDIA_URL) else url[7:]
+            local_path = os.path.join(settings.MEDIA_ROOT, media_rel)
+            if os.path.exists(local_path):
+                img_path = 'file://' + local_path
+        elif url.startswith('http'):
+            img_path = url
+        elif url.startswith('/static/'):
+            static_rel = url[len(settings.STATIC_URL):] if url.startswith(settings.STATIC_URL) else url[8:]
+            local_path = os.path.join(settings.BASE_DIR, 'static', static_rel)
+            if os.path.exists(local_path):
+                img_path = 'file://' + local_path
+        return img_path
+
     def _get_equipment_specs_html(self, col_widths):
-        param_width = col_widths.get('param', 200)
+        """Equipment specs table: Параметр 35%, Значение 20%, Изображение 45%. Images in 3rd column, rowspan distributed by photo count. Image width 95%, height auto."""
         items = self.data_pkg.get('equipment_list', [])
         html = ""
         specs_dict = self.data_pkg.get('equipment_specifications', {})
         
-        # If specs_dict is empty, try to get from database directly
         if not specs_dict or len(specs_dict) == 0:
             from .services import DataAggregatorService
             aggregator = DataAggregatorService(self.proposal)
             specs_dict = aggregator._get_equipment_specifications()
-            # Update data_pkg for future use
             self.data_pkg['equipment_specifications'] = specs_dict
         
         for item in items:
@@ -1757,7 +1774,6 @@ class ExportService:
             if not eq_id:
                 continue
             
-            # Try both int and str keys (JSON serialization may convert int keys to strings)
             specs = None
             if eq_id in specs_dict:
                 specs = specs_dict[eq_id]
@@ -1771,19 +1787,43 @@ class ExportService:
             if not specs or len(specs) == 0:
                 continue
             
-            html += f'<div class="specs-section" style="margin-bottom: 15px;">'
+            images = item.get('images', []) or []
+            total_rows = len(specs)
+            num_photos = len(images)
+            base_rowspan = total_rows // num_photos if num_photos else 0
+            remainder = total_rows % num_photos if num_photos else 0
+            
+            def image_cell_at_row(row_index):
+                if num_photos == 0:
+                    return (total_rows, None) if row_index == 0 else (None, None)
+                start = 0
+                for i in range(num_photos):
+                    r = base_rowspan + (1 if i < remainder else 0)
+                    if row_index == start:
+                        return (r, images[i] if i < len(images) else None)
+                    start += r
+                return (None, None)
+            
+            html += '<div class="specs-section" style="margin-bottom: 15px;">'
             html += f'<h3 style="font-size: 9pt; margin-bottom: 3px;">{item["name"]}</h3>'
-            html += f'<table style="width: 100%; border-collapse: collapse;">'
-            for s in specs:
+            html += '<table style="width: 100%; border-collapse: collapse; table-layout: fixed;">'
+            html += '<thead><tr style="background-color: #f9f9f9;"><th style="width: 35%; border: 1px solid #333; padding: 4px;">Параметр</th><th style="width: 20%; border: 1px solid #333; padding: 4px;">Значение</th><th style="width: 45%; border: 1px solid #333; padding: 4px;">Изображение</th></tr></thead><tbody>'
+            
+            for row_index, s in enumerate(specs):
                 spec_name = s.get('name') or s.get('spec_parameter_name', '')
                 spec_value = s.get('value') or s.get('spec_parameter_value', '')
-                html += f"""
-                <tr>
-                    <td style="width: {param_width}px; border: 1px solid #333; padding: 2px;">{spec_name}</td>
-                    <td style="border: 1px solid #333; padding: 2px;">{spec_value}</td>
-                </tr>
-                """
-            html += '</table></div>'
+                rowspan, img = image_cell_at_row(row_index)
+                img_td = ''
+                if rowspan is not None:
+                    if img and img.get('url'):
+                        img_path = self._resolve_image_path_for_pdf(img.get('url', ''))
+                        caption = (img.get('name') or '').strip()
+                        caption_html = f'<span style="font-size: 8pt; color: #666; display: block; margin-top: 4px;">{caption}</span>' if caption else ''
+                        img_td = f'<td style="width: 45%; border: 1px solid #333; padding: 4px; text-align: center; vertical-align: middle;" rowspan="{rowspan}"><img src="{img_path}" style="width: 95%; height: auto; object-fit: contain; display: block; margin: 0 auto;">{caption_html}</td>'
+                    else:
+                        img_td = f'<td style="width: 45%; border: 1px solid #333; padding: 4px; vertical-align: middle;" rowspan="{rowspan}"></td>'
+                html += f'<tr><td style="width: 35%; border: 1px solid #333; padding: 2px;">{spec_name}</td><td style="width: 20%; border: 1px solid #333; padding: 2px;">{spec_value}</td>{img_td}</tr>'
+            html += '</tbody></table></div>'
         return html
 
     def _get_equipment_details_html(self, col_widths):
