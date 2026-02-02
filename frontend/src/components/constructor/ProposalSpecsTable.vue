@@ -4,21 +4,35 @@
       <div v-if="hasSpecs(item.equipment_id)">
         <h3>{{ item.name }}</h3>
         
-        <!-- Table -->
+        <!-- Table: Параметр 35%, Значение 20%, Изображение 45% -->
         <table class="specs-table">
           <thead>
              <tr>
-               <th :style="{ width: colWidths.param + 'px' }" class="resizable-th">
-                 Параметр
-                 <div class="resizer" @mousedown="startResizing('param', $event)"></div>
-               </th>
-               <th>Значение</th>
+               <th class="col-param">Параметр</th>
+               <th class="col-value">Значение</th>
+               <th class="col-image">Изображение</th>
              </tr>
           </thead>
           <tbody>
-            <tr v-for="(spec, idx) in getSpecs(item.equipment_id)" :key="idx">
-              <td>{{ spec.name }}</td>
-              <td>{{ spec.value }}</td>
+            <tr v-for="(spec, rowIndex) in getSpecs(item.equipment_id)" :key="rowIndex">
+              <td class="col-param">{{ spec.name }}</td>
+              <td class="col-value">{{ spec.value }}</td>
+              <td
+                v-if="getImageCellAt(item.equipment_id, rowIndex)"
+                v-bind="getImageCellAt(item.equipment_id, rowIndex)!.attrs"
+                class="col-image cell-image"
+              >
+                <div v-if="getImageCellAt(item.equipment_id, rowIndex)!.photo.url" class="image-cell-inner">
+                  <img
+                    :src="getImageSrc(getImageCellAt(item.equipment_id, rowIndex)!.photo.url)"
+                    class="spec-photo"
+                    @error="handleImageError"
+                  />
+                  <span v-if="getImageCellAt(item.equipment_id, rowIndex)!.photo.name" class="spec-photo-caption">
+                    {{ getImageCellAt(item.equipment_id, rowIndex)!.photo.name }}
+                  </span>
+                </div>
+              </td>
             </tr>
           </tbody>
         </table>
@@ -29,14 +43,14 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, onUnmounted } from 'vue'
+import { computed } from 'vue'
+import { getImageSrc } from '@/utils/imageProxy'
 
 const props = defineProps<{
-  dataPackage: any,
-  columnWidths?: { param: number }
+  dataPackage: any
+  /** Не используется: ширина столбцов фиксирована 35% / 20% / 45%. Оставлено для совместимости с конструктором. */
+  columnWidths?: Record<string, number>
 }>()
-
-const emit = defineEmits(['update:columnWidths'])
 
 const items = computed(() => props.dataPackage?.equipment_list || [])
 const specsMap = computed(() => props.dataPackage?.equipment_specifications || {})
@@ -49,45 +63,49 @@ const getSpecs = (id: number) => {
   return specsMap.value[id] || []
 }
 
-const colWidths = ref({
-  param: props.columnWidths?.param || 200
-})
-
-const isResizing = ref(false)
-const currentResizer = ref<string | null>(null)
-const startX = ref(0)
-const startWidth = ref(0)
-
-const startResizing = (col: string, event: MouseEvent) => {
-  isResizing.value = true
-  currentResizer.value = col
-  startX.value = event.clientX
-  startWidth.value = (colWidths.value as any)[col]
-  
-  document.addEventListener('mousemove', handleMouseMove)
-  document.addEventListener('mouseup', stopResizing)
-  event.preventDefault()
+/** Фото оборудования по equipment_id (из equipment_list[].images) */
+const getImages = (equipmentId: number): { name: string; url: string }[] => {
+  const item = items.value.find((i: any) => i.equipment_id === equipmentId)
+  return (item?.images && Array.isArray(item.images)) ? item.images : []
 }
 
-const handleMouseMove = (event: MouseEvent) => {
-  if (!isResizing.value || !currentResizer.value) return
-  const deltaX = event.clientX - startX.value
-  const newWidth = Math.max(50, startWidth.value + deltaX)
-  ;(colWidths.value as any)[currentResizer.value] = newWidth
+/**
+ * Равномерное распределение фото по строкам третьего столбца.
+ * Возвращает для данной строки ячейку с rowspan и фото, если в этой строке начинается новая ячейка; иначе null.
+ */
+interface ImageCellInfo {
+  attrs: { rowspan: number }
+  photo: { name: string; url: string }
+}
+const getImageCellAt = (equipmentId: number, rowIndex: number): ImageCellInfo | null => {
+  const specs = getSpecs(equipmentId)
+  const images = getImages(equipmentId)
+  const totalRows = specs.length
+  if (totalRows === 0) return null
+
+  if (images.length === 0) {
+    // Одна пустая ячейка на всю высоту — показываем только в первой строке
+    return rowIndex === 0 ? { attrs: { rowspan: totalRows }, photo: { name: '', url: '' } } : null
+  }
+
+  const numPhotos = images.length
+  const baseRowspan = Math.floor(totalRows / numPhotos)
+  const remainder = totalRows % numPhotos
+  let startRow = 0
+  for (let i = 0; i < numPhotos; i++) {
+    const rowspan = i < remainder ? baseRowspan + 1 : baseRowspan
+    if (rowIndex === startRow) {
+      return { attrs: { rowspan }, photo: images[i] }
+    }
+    startRow += rowspan
+  }
+  return null
 }
 
-const stopResizing = () => {
-  isResizing.value = false
-  currentResizer.value = null
-  document.removeEventListener('mousemove', handleMouseMove)
-  document.removeEventListener('mouseup', stopResizing)
-  emit('update:columnWidths', { ...colWidths.value })
+const handleImageError = (e: Event) => {
+  const target = e.target as HTMLImageElement
+  target.style.display = 'none'
 }
-
-onUnmounted(() => {
-  document.removeEventListener('mousemove', handleMouseMove)
-  document.removeEventListener('mouseup', stopResizing)
-})
 </script>
 
 <style scoped>
@@ -108,32 +126,54 @@ h3 {
   width: 100%;
   border-collapse: collapse;
   margin-bottom: 15px;
+  table-layout: fixed;
 }
-.specs-table th, .specs-table td {
+.specs-table th,
+.specs-table td {
   border: 1px solid #ddd;
   padding: 6px;
   text-align: left;
-  position: relative;
+  vertical-align: top;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .specs-table th {
   background-color: #f9f9f9;
 }
-.resizable-th {
-  position: relative;
+.col-param {
+  width: 35%;
 }
-.resizer {
-  position: absolute;
-  right: 0;
-  top: 0;
-  width: 5px;
-  cursor: col-resize;
-  user-select: none;
-  height: 100%;
-  z-index: 1;
+.col-value {
+  width: 20%;
 }
-.resizer:hover {
-  background: #409eff;
+.col-image {
+  width: 45%;
+}
+.cell-image {
+  vertical-align: middle;
+  text-align: center;
+}
+.image-cell-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 60px;
+  padding: 4px;
+}
+.spec-photo {
+  width: 95%;
+  height: auto;
+  object-fit: contain;
+  display: block;
+}
+.spec-photo-caption {
+  margin-top: 4px;
+  font-size: 8pt;
+  color: #666;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
 }
 </style>
