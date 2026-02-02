@@ -1,3 +1,4 @@
+import logging
 from rest_framework import status, generics, permissions, serializers, viewsets
 from django.views.decorators.csrf import csrf_exempt
 from django.conf import settings
@@ -3105,45 +3106,67 @@ class BitrixImportClientView(APIView):
             return Response({'error': company}, status=status.HTTP_400_BAD_REQUEST)
         if not company or not isinstance(company, dict):
             return Response({'error': 'Компания не найдена в Bitrix24'}, status=status.HTTP_404_NOT_FOUND)
-        # Get requisites for BIN, address, bank
-        _, requisites = bitrix_client.get_company_requisites(url, bitrix_id)
-        req = (requisites or [])[0] if requisites else {}
-        title = company.get('TITLE') or company.get('title') or ''
+        # Реквизиты опциональны: что пришло из Bitrix (компания + реквизиты при успехе) — то и пишем в БД
+        ok_req, requisites = bitrix_client.get_company_requisites(url, bitrix_id)
+        if ok_req and isinstance(requisites, list) and requisites and isinstance(requisites[0], dict):
+            req = requisites[0]
+        else:
+            req = {}
+        title = (company.get('TITLE') or company.get('title') or '').strip()
         phone = company.get('PHONE')
         if isinstance(phone, list) and phone:
-            phone = phone[0].get('VALUE') if isinstance(phone[0], dict) else str(phone[0])
-        elif not isinstance(phone, str):
-            phone = str(phone) if phone else ''
+            p0 = phone[0]
+            phone = (p0.get('VALUE') or p0.get('Value') or str(p0)) if isinstance(p0, dict) else str(p0)
+        else:
+            phone = (phone or '') if isinstance(phone, str) else str(phone or '')
+        phone = phone.strip()[:20] if phone else None
         email = company.get('EMAIL')
         if isinstance(email, list) and email:
-            email = email[0].get('VALUE') if isinstance(email[0], dict) else str(email[0])
-        elif not isinstance(email, str):
-            email = str(email) if email else ''
+            e0 = email[0]
+            email = (e0.get('VALUE') or e0.get('Value') or str(e0)) if isinstance(e0, dict) else str(e0)
+        else:
+            email = (email or '') if isinstance(email, str) else str(email or '')
+        email = email.strip()[:254] if email else None
+        if email and '@' not in email:
+            email = None
         address = company.get('ADDRESS') or company.get('ADDRESS_LEGAL') or req.get('RQ_ADDR') or req.get('RQ_BANK_ADDR') or ''
+        if isinstance(address, list) and address:
+            address = address[0]
         if isinstance(address, dict):
-            address = address.get('VALUE') or address.get('postalAddress') or ''
+            address = (address.get('VALUE') or address.get('postalAddress') or address.get('Value') or '').strip()
+        else:
+            address = (str(address) if address else '').strip()
         bin_iin = (
-            company.get('UF_CRM_LEGALENTITY_INN') or company.get('UF_CRM_1657870237252') or
-            company.get('UF_CRM_COMPANY_INN') or req.get('RQ_INN') or ''
-        )
-        bik = req.get('RQ_BIK') or ''
-        iik = req.get('RQ_ACC_NUM') or req.get('RQ_IIK') or ''
-        bankname = req.get('RQ_BANK_NAME') or ''
-        client_name = title or f'Bitrix #{bitrix_id}'
-        client, created = Client.objects.update_or_create(
-            bitrix_id=bitrix_id,
-            defaults={
-                'client_name': client_name[:255],
-                'client_company_name': title[:255] if title else None,
-                'client_phone': phone[:20] if phone else None,
-                'client_email': email[:254] if email else None,
-                'client_bin_iin': (bin_iin or None)[:20] if bin_iin else None,
-                'client_address': (address or None)[:500] if address else None,
-                'client_bik': (bik or None)[:500] if bik else None,
-                'client_iik': (iik or None)[:500] if iik else None,
-                'client_bankname': (bankname or None)[:255] if bankname else None,
-            }
-        )
+            (company.get('UF_CRM_LEGALENTITY_INN') or company.get('UF_CRM_1657870237252') or
+             company.get('UF_CRM_COMPANY_INN') or req.get('RQ_INN') or '')
+        ).strip()[:20] or None
+        bik = (req.get('RQ_BIK') or '').strip()[:500] or None
+        iik = (req.get('RQ_ACC_NUM') or req.get('RQ_IIK') or '').strip()[:500] or None
+        bankname = (req.get('RQ_BANK_NAME') or '').strip()[:255] or None
+        client_name = (title or f'Bitrix #{bitrix_id}')[:255]
+        address_clean = address[:500] if address else None
+        defaults = {
+            'client_name': client_name,
+            'client_company_name': title[:255] if title else None,
+            'client_phone': phone,
+            'client_email': email,
+            'client_bin_iin': bin_iin,
+            'client_address': address_clean,
+            'client_bik': bik,
+            'client_iik': iik,
+            'client_bankname': bankname,
+        }
+        try:
+            client, created = Client.objects.update_or_create(
+                bitrix_id=bitrix_id,
+                defaults=defaults
+            )
+        except Exception as e:
+            logging.getLogger(__name__).exception("Bitrix import client failed")
+            return Response(
+                {'error': f'Ошибка сохранения клиента: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
         return Response({'client_id': client.client_id}, status=status.HTTP_200_OK)
 
 

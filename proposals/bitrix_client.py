@@ -31,10 +31,11 @@ def bitrix_call(webhook_url, method, params=None):
         return False, "Неверный URL вебхука"
     try:
         r = requests.get(url, params=params or {}, timeout=15)
-        r.raise_for_status()
-        data = r.json()
+        data = r.json() if r.content else {}
         if "error" in data:
             return False, data.get("error_description", data.get("error", "Ошибка Bitrix24"))
+        if not r.ok:
+            return False, str(r.reason) or f"HTTP {r.status_code}"
         return True, data.get("result", data)
     except requests.RequestException as e:
         logger.exception("Bitrix24 request failed")

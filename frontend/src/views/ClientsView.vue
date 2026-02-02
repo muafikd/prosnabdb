@@ -41,6 +41,21 @@
         <el-table-column prop="client_email" label="Email" />
         <el-table-column prop="client_type" label="Тип" width="120" />
         <el-table-column prop="client_bin_iin" label="БИН/ИИН" width="120" />
+        <el-table-column label="Bitrix24" width="120" align="center">
+          <template #default="{ row }">
+            <el-link
+              v-if="row.bitrix_id && bitrixCompanyUrl(row.bitrix_id)"
+              :href="bitrixCompanyUrl(row.bitrix_id)!"
+              target="_blank"
+              type="primary"
+              :underline="false"
+            >
+              <el-icon><Link /></el-icon>
+              Открыть
+            </el-link>
+            <span v-else class="text-muted">—</span>
+          </template>
+        </el-table-column>
         <el-table-column prop="created_at" label="Дата создания" width="180" sortable>
           <template #default="{ row }">
             {{ formatDate(row.created_at) }}
@@ -142,6 +157,17 @@
         <el-form-item label="Название банка" prop="client_bankname">
           <el-input v-model="formData.client_bankname" placeholder="Введите название банка" />
         </el-form-item>
+
+        <el-form-item v-if="isEditMode && currentClientBitrixId" label="Bitrix24">
+          <el-link
+            :href="bitrixCompanyUrl(currentClientBitrixId)!"
+            target="_blank"
+            type="primary"
+          >
+            <el-icon><Link /></el-icon>
+            Открыть компанию в Bitrix24
+          </el-link>
+        </el-form-item>
       </el-form>
 
       <template #footer>
@@ -159,8 +185,9 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
-import { Plus, Edit, Delete, Search } from '@element-plus/icons-vue'
+import { Plus, Edit, Delete, Search, Link } from '@element-plus/icons-vue'
 import { clientsAPI, type Client, type ClientCreateData } from '@/api/clients'
+import { bitrixAPI } from '@/api/bitrix'
 import { format } from 'date-fns'
 
 // State
@@ -174,7 +201,14 @@ const searchQuery = ref('')
 const dialogVisible = ref(false)
 const isEditMode = ref(false)
 const currentClientId = ref<number | null>(null)
+const currentClientBitrixId = ref<number | null>(null)
 const formRef = ref<FormInstance>()
+const bitrixBaseUrl = ref('')
+
+function bitrixCompanyUrl(bitrixId: number | null | undefined): string | null {
+  if (!bitrixId || !bitrixBaseUrl.value) return null
+  return `${bitrixBaseUrl.value}/crm/company/details/${bitrixId}/`
+}
 
 // Form data
 const formData = reactive<ClientCreateData>({
@@ -243,6 +277,7 @@ const handlePageChange = (page: number) => {
 const handleCreate = () => {
   isEditMode.value = false
   currentClientId.value = null
+  currentClientBitrixId.value = null
   resetForm()
   dialogVisible.value = true
 }
@@ -268,7 +303,7 @@ const handleEdit = async (client: Client) => {
       client_iik: clientData.client_iik || '',
       client_bankname: clientData.client_bankname || '',
     })
-    
+    currentClientBitrixId.value = clientData.bitrix_id ?? null
     dialogVisible.value = true
   } catch (error: any) {
     ElMessage.error(error.response?.data?.message || 'Ошибка загрузки данных клиента')
@@ -362,9 +397,23 @@ const formatDate = (dateString: string) => {
   }
 }
 
-// Lifecycle
+// Загружаем базовый URL Bitrix24 для ссылок на компанию (из webhook: https://portal.bitrix24.kz/rest/... → https://portal.bitrix24.kz)
+const loadBitrixBaseUrl = async () => {
+  try {
+    const settings = await bitrixAPI.getSystemSettings()
+    const url = (settings.bitrix_webhook_url || '').trim()
+    if (url) {
+      const u = new URL(url)
+      bitrixBaseUrl.value = u.origin
+    }
+  } catch {
+    bitrixBaseUrl.value = ''
+  }
+}
+
 onMounted(() => {
   loadClients()
+  loadBitrixBaseUrl()
 })
 </script>
 
@@ -398,5 +447,10 @@ onMounted(() => {
   display: flex;
   justify-content: flex-end;
   gap: 10px;
+}
+
+.text-muted {
+  color: #909399;
+  font-size: 12px;
 }
 </style>
