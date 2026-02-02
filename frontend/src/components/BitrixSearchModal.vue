@@ -43,6 +43,18 @@
           </template>
         </el-input>
       </el-tab-pane>
+      <el-tab-pane label="По сделке" name="deal">
+        <el-input
+          v-model="queryDeal"
+          placeholder="Введите название сделки (от 3 символов)"
+          clearable
+          @input="debouncedSearch('deal')"
+        >
+          <template #prefix>
+            <el-icon><Search /></el-icon>
+          </template>
+        </el-input>
+      </el-tab-pane>
     </el-tabs>
 
     <div class="search-results">
@@ -65,8 +77,11 @@
           @click="selectItem(item)"
           @keydown.enter="selectItem(item)"
         >
-          <div class="result-title">{{ item.TITLE || item.COMPANY_TITLE || `Компания #${item.ID}` }}</div>
-          <div v-if="item.UF_CRM_LEGALENTITY_INN || item.UF_CRM_1657870237252" class="result-meta">
+          <div class="result-title">{{ item.TITLE || item.COMPANY_TITLE || `#${item.ID}` }}</div>
+          <div v-if="activeTab === 'deal' && item.COMPANY_TITLE" class="result-meta">
+            Компания: {{ item.COMPANY_TITLE }}
+          </div>
+          <div v-else-if="item.UF_CRM_LEGALENTITY_INN || item.UF_CRM_1657870237252" class="result-meta">
             БИН/ИИН: {{ item.UF_CRM_LEGALENTITY_INN || item.UF_CRM_1657870237252 }}
           </div>
         </li>
@@ -85,13 +100,18 @@ import { Search, Loading } from '@element-plus/icons-vue'
 import { bitrixAPI, type BitrixCompanyItem } from '@/api/bitrix'
 import { useDebounceFn } from '@vueuse/core'
 
-const props = defineProps<{
-  modelValue: boolean
-}>()
+const props = withDefaults(
+  defineProps<{
+    modelValue: boolean
+    defaultTab?: 'name' | 'contact' | 'requisite' | 'deal'
+  }>(),
+  { defaultTab: 'name' }
+)
 
 const emit = defineEmits<{
   (e: 'update:modelValue', v: boolean): void
   (e: 'select', clientId: number): void
+  (e: 'selectDeal', payload: { deal_id: number; client_id: number | null; deal_title: string }): void
 }>()
 
 const visible = computed({
@@ -99,10 +119,11 @@ const visible = computed({
   set: (v) => emit('update:modelValue', v),
 })
 
-const activeTab = ref<'name' | 'contact' | 'requisite'>('name')
+const activeTab = ref<'name' | 'contact' | 'requisite' | 'deal'>(props.defaultTab || 'name')
 const queryName = ref('')
 const queryContact = ref('')
 const queryRequisite = ref('')
+const queryDeal = ref('')
 const results = ref<BitrixCompanyItem[]>([])
 const loading = ref(false)
 const error = ref('')
@@ -114,6 +135,7 @@ const debounceMs = 500
 function getQuery(): string {
   if (activeTab.value === 'name') return queryName.value.trim()
   if (activeTab.value === 'contact') return queryContact.value.trim()
+  if (activeTab.value === 'deal') return queryDeal.value.trim()
   return queryRequisite.value.trim()
 }
 
@@ -153,21 +175,42 @@ watch(activeTab, () => {
   debouncedSearchByTab(activeTab.value)
 })
 
+watch(() => [props.modelValue, props.defaultTab], ([visible, tab]) => {
+  if (visible && tab) {
+    activeTab.value = tab as 'name' | 'contact' | 'requisite' | 'deal'
+  }
+}, { immediate: true })
+
 async function selectItem(item: BitrixCompanyItem) {
-  const bitrixId = typeof item.ID === 'string' ? parseInt(item.ID, 10) : item.ID
-  if (Number.isNaN(bitrixId)) return
+  const id = typeof item.ID === 'string' ? parseInt(item.ID, 10) : item.ID
+  if (Number.isNaN(id)) return
   loading.value = true
   error.value = ''
   try {
-    const res = await bitrixAPI.importClient(bitrixId)
-    if (res.client_id) {
-      emit('select', res.client_id)
-      visible.value = false
+    const isDeal = activeTab.value === 'deal'
+    if (isDeal) {
+      const res = await bitrixAPI.selectDeal(id)
+      if (res.deal_id != null) {
+        emit('selectDeal', {
+          deal_id: res.deal_id,
+          client_id: res.client_id ?? null,
+          deal_title: res.deal_title || (item.TITLE as string) || '',
+        })
+        visible.value = false
+      } else {
+        error.value = (res as any).error || 'Ошибка выбора сделки'
+      }
     } else {
-      error.value = (res as any).error || 'Ошибка импорта'
+      const res = await bitrixAPI.importClient(id)
+      if (res.client_id) {
+        emit('select', res.client_id)
+        visible.value = false
+      } else {
+        error.value = (res as any).error || 'Ошибка импорта'
+      }
     }
   } catch (e: any) {
-    error.value = e.response?.data?.error || e.message || 'Ошибка импорта клиента'
+    error.value = e.response?.data?.error || e.message || (activeTab.value === 'deal' ? 'Ошибка выбора сделки' : 'Ошибка импорта клиента')
   } finally {
     loading.value = false
   }
@@ -178,6 +221,7 @@ function handleClose() {
   queryName.value = ''
   queryContact.value = ''
   queryRequisite.value = ''
+  queryDeal.value = ''
   results.value = []
   error.value = ''
   hasSearched.value = false

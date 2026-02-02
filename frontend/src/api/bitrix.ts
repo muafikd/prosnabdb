@@ -33,6 +33,13 @@ export interface BitrixImportResponse {
   error?: string
 }
 
+export interface BitrixSelectDealResponse {
+  deal_id: number
+  client_id: number | null
+  deal_title: string
+  error?: string
+}
+
 export const bitrixAPI = {
   async getSystemSettings(): Promise<SystemSettingsResponse> {
     const response: AxiosResponse<SystemSettingsResponse> = await apiClient.get('/system-settings/')
@@ -51,7 +58,7 @@ export const bitrixAPI = {
     return response.data
   },
 
-  async search(type: 'name' | 'contact' | 'requisite', q: string): Promise<BitrixSearchResponse> {
+  async search(type: 'name' | 'contact' | 'requisite' | 'deal', q: string): Promise<BitrixSearchResponse> {
     const response: AxiosResponse<BitrixSearchResponse> = await apiClient.get('/bitrix/search/', {
       params: { type, q },
     })
@@ -61,6 +68,22 @@ export const bitrixAPI = {
   async importClient(bitrix_id: number): Promise<BitrixImportResponse> {
     const response: AxiosResponse<BitrixImportResponse> = await apiClient.post('/bitrix/import-client/', {
       bitrix_id,
+    })
+    return response.data
+  },
+
+  /** Импорт клиента из компании сделки (по bitrix_deal_id). */
+  async importClientFromDeal(bitrix_deal_id: number): Promise<BitrixImportResponse> {
+    const response: AxiosResponse<BitrixImportResponse> = await apiClient.post('/bitrix/import-client/', {
+      bitrix_deal_id,
+    })
+    return response.data
+  },
+
+  /** Выбор сделки: сохранить/обновить CrmDeal, при наличии компании — импорт в clients. Возвращает deal_id, client_id (или null), deal_title. */
+  async selectDeal(bitrix_deal_id: number): Promise<BitrixSelectDealResponse> {
+    const response: AxiosResponse<BitrixSelectDealResponse> = await apiClient.post('/bitrix/select-deal/', {
+      bitrix_deal_id,
     })
     return response.data
   },

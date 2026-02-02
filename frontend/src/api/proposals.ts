@@ -6,11 +6,20 @@ export interface CommercialProposal {
   proposal_id: number
   proposal_name: string
   outcoming_number: string
-  client: {
+  client?: {
     client_id: number
     client_name: string
     client_company_name?: string
-  }
+  } | null
+  deal?: {
+    id: number
+    bitrix_deal_id: string
+    title: string
+    stage_id: string
+    stage_title?: string | null
+    contact_name?: string | null
+    client?: { client_id: number; client_name: string; client_company_name?: string } | null
+  } | null
   user?: {
     user_id: number
     user_name: string
@@ -55,7 +64,8 @@ export interface CommercialProposalCreateData {
   proposal_id?: number
   proposal_name: string
   outcoming_number: string
-  client_id: number
+  deal_id?: number | null
+  client_id?: number | null
   user_id?: number
   currency_ticket: string
   exchange_rate: string

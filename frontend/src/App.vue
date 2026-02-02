@@ -54,6 +54,12 @@
               <span>КП</span>
             </template>
           </el-menu-item>
+          <el-menu-item index="/deals" v-if="authStore.isManager">
+            <el-icon><Document /></el-icon>
+            <template #title>
+              <span>Сделки Bitrix</span>
+            </template>
+          </el-menu-item>
           <el-menu-item index="/proposal-constructor" v-if="authStore.isAuthenticated">
             <el-icon><Edit /></el-icon>
             <template #title>
@@ -164,6 +170,7 @@ const pageTitle = computed(() => {
     '/clients': 'Клиенты',
     '/manufacturers': 'Производители',
     '/proposals': 'Коммерческие предложения',
+    '/deals': 'Сделки Bitrix',
   }
   return titles[route.path] || 'Система КП'
 })

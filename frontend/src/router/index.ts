@@ -48,6 +48,12 @@ const router = createRouter({
       meta: { requiresAuth: true, requiresManager: true },
     },
     {
+      path: '/deals',
+      name: 'deals',
+      component: () => import('../views/DealsView.vue'),
+      meta: { requiresAuth: true, requiresManager: true },
+    },
+    {
       path: '/manufacturers',
       name: 'manufacturers',
       component: () => import('../views/ManufacturerListView.vue'),

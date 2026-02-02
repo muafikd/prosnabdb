@@ -124,7 +124,10 @@ urlpatterns = [
     path('system-settings/', views.SystemSettingsView.as_view(), name='system-settings'),
     path('bitrix/check/', views.BitrixCheckConnectionView.as_view(), name='bitrix-check'),
     path('bitrix/search/', views.BitrixSearchView.as_view(), name='bitrix-search'),
+    path('bitrix/select-deal/', views.BitrixSelectDealView.as_view(), name='bitrix-select-deal'),
     path('bitrix/import-client/', views.BitrixImportClientView.as_view(), name='bitrix-import-client'),
+    path('deals/', views.CrmDealListView.as_view(), name='crm-deal-list'),
+    path('deals/<int:pk>/', views.CrmDealDetailView.as_view(), name='crm-deal-detail'),
     path('proxy-image/', views.ImageProxyView.as_view(), name='proxy-image'),
 
     # Dashboard stats endpoint

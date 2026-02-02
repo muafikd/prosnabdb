@@ -1,7 +1,6 @@
 """
-Bitrix24 REST API client via webhook.
-Webhook URL format: https://your-domain.bitrix24.com/rest/1/CODE/
-Method is appended: .../crm.company.list
+Bitrix24 REST API client (webhook). URL: https://xxx.bitrix24.com/rest/1/CODE/
+Вебхук: права CRM (компании, контакты, сделки). Документация: BITRIX_INTEGRATION.md
 """
 import logging
 import requests
@@ -71,8 +70,17 @@ def check_connection(webhook_url):
 
 
 def search_companies_by_title(webhook_url, query, limit=20):
-    """Search companies by title (TITLE). Substring: filter[%TITLE]=query."""
+    """
+    Search companies by title (TITLE).
+    Сначала пробуем фильтр %TITLE (подстрока). Если вебхук не поддерживает такой фильтр
+    или прав не хватает — делаем fallback: запрашиваем список без фильтра и фильтруем по названию в коде.
+    """
     select = ["ID", "TITLE", "PHONE", "EMAIL", "ADDRESS", "ADDRESS_LEGAL", "UF_CRM_LEGALENTITY_INN", "UF_CRM_1657870237252"]
+    query_lower = (query or "").strip().lower()
+    if not query_lower:
+        return True, []
+
+    # 1) Поиск с фильтром по подстроке (требует прав на фильтр в Bitrix24)
     params = _flat_params({"ID": "DESC"}, select, 0, {"%TITLE": query})
     ok, result = bitrix_call(webhook_url, "crm.company.list", params)
     if not ok:
@@ -82,6 +90,22 @@ def search_companies_by_title(webhook_url, query, limit=20):
         items = items.get("result", [])
     if not isinstance(items, list):
         items = []
+
+    # 2) Fallback: если по фильтру ничего не нашли — запрашиваем последние компании и ищем по названию в коде
+    if len(items) == 0:
+        params_no_filter = _flat_params({"ID": "DESC"}, select, 0, None)
+        ok2, result2 = bitrix_call(webhook_url, "crm.company.list", params_no_filter)
+        if ok2:
+            raw = result2 if isinstance(result2, list) else (result2.get("result") or result2)
+            if isinstance(raw, dict):
+                raw = raw.get("result", [])
+            if isinstance(raw, list):
+                for c in raw:
+                    title = (c.get("TITLE") or c.get("title") or "")
+                    if query_lower in (title or "").lower():
+                        items.append(c)
+                        if len(items) >= limit:
+                            break
     return True, items[:limit]
 
 
@@ -171,6 +195,82 @@ def search_companies_by_requisite(webhook_url, query, limit=20):
     if not isinstance(companies, list):
         companies = []
     return True, companies[:limit]
+
+
+def search_deals_by_title(webhook_url, query, limit=20):
+    """Поиск сделок (deal) по названию. Возвращает список сделок с ID, TITLE, COMPANY_ID, COMPANY_TITLE."""
+    query = (query or "").strip()
+    if not query:
+        return True, []
+    select = ["ID", "TITLE", "COMPANY_ID", "COMPANY_TITLE"]
+    params = _flat_params({"ID": "DESC"}, select, 0, {"%TITLE": query})
+    ok, result = bitrix_call(webhook_url, "crm.deal.list", params)
+    if not ok:
+        return ok, result
+    items = result if isinstance(result, list) else (result.get("result") or result)
+    if isinstance(items, dict):
+        items = items.get("result", [])
+    if not isinstance(items, list):
+        items = []
+    return True, items[:limit]
+
+
+def get_deal_by_id(webhook_url, deal_id):
+    """Получить сделку по ID (TITLE, STAGE_ID, COMPANY_ID, CONTACT_ID и т.д.)."""
+    ok, result = bitrix_call(
+        webhook_url,
+        "crm.deal.get",
+        {"id": deal_id}
+    )
+    if not ok:
+        return ok, result
+    return True, result if isinstance(result, dict) else {}
+
+
+def get_deal_stage_name(webhook_url, stage_id, category_id=None):
+    """
+    Получить читаемое название стадии сделки по stage_id.
+    Вызывает crm.status.list (ENTITY_ID = DEAL_STAGE или DEAL_STAGE_{categoryId}).
+    Возвращает (True, "Название стадии") или (False, error) / (True, None) если не найдено.
+    """
+    if not stage_id or not str(stage_id).strip():
+        return True, None
+    entity_id = "DEAL_STAGE"
+    if category_id is not None and str(category_id).strip():
+        entity_id = f"DEAL_STAGE_{category_id}"
+    ok, result = bitrix_call(
+        webhook_url,
+        "crm.status.list",
+        {"filter[ENTITY_ID]": entity_id}
+    )
+    if not ok:
+        return False, result
+    items = result if isinstance(result, list) else (result.get("result") or result) if isinstance(result, dict) else []
+    if isinstance(items, dict):
+        items = items.get("result", [])
+    if not isinstance(items, list):
+        return True, None
+    stage_id_str = str(stage_id).strip()
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        sid = item.get("STATUS_ID") or item.get("statusId") or item.get("ID") or item.get("id")
+        if sid and str(sid).strip() == stage_id_str:
+            name = (item.get("NAME") or item.get("name") or "").strip()
+            return True, name[:255] if name else None
+    return True, None
+
+
+def get_contact_by_id(webhook_url, contact_id):
+    """Получить контакт по ID (для имени представителя)."""
+    ok, result = bitrix_call(
+        webhook_url,
+        "crm.contact.get",
+        {"id": contact_id}
+    )
+    if not ok:
+        return ok, result
+    return True, result if isinstance(result, dict) else {}
 
 
 def get_company_by_id(webhook_url, company_id):

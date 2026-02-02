@@ -718,6 +718,39 @@ class PaymentLog(models.Model):
         return f"{self.payment_name} - {self.payment_value} ({self.payment_date})"
 
 
+class CrmDeal(models.Model):
+    """Сделка из Bitrix24 CRM (локальная копия для привязки к КП)."""
+    id = models.AutoField(primary_key=True, verbose_name='ID')
+    bitrix_deal_id = models.CharField(max_length=50, unique=True, verbose_name='ID сделки в Bitrix24')
+    title = models.CharField(max_length=500, verbose_name='Название сделки')
+    stage_id = models.CharField(max_length=100, blank=True, verbose_name='Код стадии (Bitrix)')
+    stage_title = models.CharField(max_length=255, null=True, blank=True, verbose_name='Название стадии сделки')
+    bitrix_company_id = models.CharField(max_length=50, null=True, blank=True, verbose_name='ID компании в Bitrix24')
+    bitrix_contact_id = models.CharField(max_length=50, null=True, blank=True, verbose_name='ID контакта в Bitrix24')
+    contact_name = models.CharField(max_length=255, null=True, blank=True, verbose_name='Имя контакта')
+    contact_phone = models.CharField(max_length=50, null=True, blank=True, verbose_name='Телефон контактного лица')
+    client = models.ForeignKey(
+        Client,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='crm_deals',
+        db_column='client_id',
+        verbose_name='Локальный клиент (компания)'
+    )
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='Дата создания')
+    updated_at = models.DateTimeField(auto_now=True, verbose_name='Дата обновления')
+
+    class Meta:
+        db_table = 'crm_deal_list'
+        verbose_name = 'Сделка Bitrix24'
+        verbose_name_plural = 'Сделки Bitrix24'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return self.title or f"Сделка #{self.bitrix_deal_id}"
+
+
 class CommercialProposal(models.Model):
     """CommercialProposal model for storing commercial proposals."""
     
@@ -735,13 +768,24 @@ class CommercialProposal(models.Model):
     proposal_name = models.CharField(max_length=255, verbose_name='Название КП')
     outcoming_number = models.CharField(max_length=100, unique=True, verbose_name='Номер КП')
     
-    # Foreign Keys
+    # Foreign Keys: сделка обязательна для привязки КП, клиент опционален (подтягивается из сделки)
+    deal = models.ForeignKey(
+        CrmDeal,
+        on_delete=models.PROTECT,
+        related_name='commercial_proposals',
+        db_column='deal_id',
+        verbose_name='Сделка Bitrix24',
+        null=True,
+        blank=True
+    )
     client = models.ForeignKey(
         Client,
         on_delete=models.CASCADE,
         related_name='commercial_proposals',
         db_column='client_id',
-        verbose_name='Клиент'
+        verbose_name='Клиент',
+        null=True,
+        blank=True
     )
     user = models.ForeignKey(
         User,

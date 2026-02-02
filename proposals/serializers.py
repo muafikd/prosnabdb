@@ -4,8 +4,8 @@ from .models import (
     User, Client, Category, Manufacturer, EquipmentTypes, EquipmentDetails,
     EquipmentSpecification, EquipmentTechProcess, Equipment, PurchasePrice,
     Logistics, EquipmentDocument, EquipmentLine, EquipmentLineItem, AdditionalPrices,
-    EquipmentList, EquipmentListLineItem, EquipmentListItem, PaymentLog, CommercialProposal,
-    ExchangeRate, CostCalculation, ProposalTemplate, SectionTemplate
+    EquipmentList, EquipmentListLineItem, EquipmentListItem, PaymentLog, CrmDeal,
+    CommercialProposal, ExchangeRate, CostCalculation, ProposalTemplate, SectionTemplate
 )
 from django.conf import settings
 from .services import LinkConverterService, CloudImageImportService
@@ -144,6 +144,38 @@ class ClientSerializer(serializers.ModelSerializer):
             'bitrix_id', 'created_at', 'updated_at'
         ]
         read_only_fields = ['client_id', 'created_at', 'updated_at']
+
+
+class CrmDealSerializer(serializers.ModelSerializer):
+    """Serializer for CrmDeal (Bitrix deal cached locally)."""
+    client = ClientSerializer(read_only=True)
+    commercial_proposal_ids = serializers.SerializerMethodField()
+    bitrix_deal_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = CrmDeal
+        fields = [
+            'id', 'bitrix_deal_id', 'title', 'stage_id', 'stage_title',
+            'bitrix_company_id', 'bitrix_contact_id', 'contact_name', 'contact_phone',
+            'client', 'commercial_proposal_ids', 'bitrix_deal_url',
+            'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def get_commercial_proposal_ids(self, obj):
+        return list(obj.commercial_proposals.values_list('proposal_id', flat=True))
+
+    def get_bitrix_deal_url(self, obj):
+        from .models import SystemSettings
+        settings = SystemSettings.get_settings()
+        url = (settings.bitrix_webhook_url or '').strip()
+        if not url or not obj.bitrix_deal_id:
+            return None
+        # webhook: https://domain.bitrix24.com/rest/1/CODE/ -> base: https://domain.bitrix24.com
+        from urllib.parse import urlparse
+        parsed = urlparse(url)
+        base = f"{parsed.scheme}://{parsed.netloc}"
+        return f"{base}/crm/deal/details/{obj.bitrix_deal_id}/"
 
 
 class CategorySerializer(serializers.ModelSerializer):
@@ -726,6 +758,7 @@ class CommercialProposalSerializer(serializers.ModelSerializer):
     
     # Nested serializers for read operations
     client = ClientSerializer(read_only=True)
+    deal = CrmDealSerializer(read_only=True)
     user = UserSerializer(read_only=True)
     updated_by = UserSerializer(read_only=True)
     parent_proposal = serializers.SerializerMethodField()
@@ -736,7 +769,16 @@ class CommercialProposalSerializer(serializers.ModelSerializer):
     client_id = serializers.PrimaryKeyRelatedField(
         queryset=Client.objects.all(),
         source='client',
-        write_only=True
+        write_only=True,
+        required=False,
+        allow_null=True
+    )
+    deal_id = serializers.PrimaryKeyRelatedField(
+        queryset=CrmDeal.objects.all(),
+        source='deal',
+        write_only=True,
+        required=False,
+        allow_null=True
     )
     user_id = serializers.PrimaryKeyRelatedField(
         queryset=User.objects.all(),
@@ -787,7 +829,7 @@ class CommercialProposalSerializer(serializers.ModelSerializer):
         model = CommercialProposal
         fields = [
             'proposal_id', 'proposal_name', 'outcoming_number',
-            'client', 'client_id', 'user', 'user_id',
+            'client', 'client_id', 'deal', 'deal_id', 'user', 'user_id',
             'currency_ticket', 'exchange_rate', 'exchange_rate_date',
             'total_price', 'cost_price', 'margin_percentage', 'margin_value',
             'proposal_date', 'valid_until', 'delivery_time', 'warranty',

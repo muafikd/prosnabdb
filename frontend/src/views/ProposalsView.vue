@@ -189,6 +189,42 @@
             label-position="left"
           >
             <el-row :gutter="20">
+              <el-col :span="24">
+                <el-form-item label="Сделка *" prop="deal_id">
+                  <div class="client-select-row">
+                    <el-select
+                      v-model="formData.deal_id"
+                      filterable
+                      placeholder="Выберите сделку из списка или найдите в Bitrix24"
+                      style="flex: 1;"
+                      clearable
+                    >
+                      <el-option
+                        v-for="deal in deals"
+                        :key="deal.id"
+                        :label="deal.title"
+                        :value="deal.id"
+                      >
+                        <span>{{ deal.title }}</span>
+                        <span v-if="deal.stage_title || deal.stage_id" class="option-meta"> — {{ deal.stage_title || deal.stage_id }}</span>
+                      </el-option>
+                    </el-select>
+                    <el-button
+                      type="primary"
+                      plain
+                      class="bitrix-search-btn"
+                      title="Поиск в Bitrix24"
+                      @click="openBitrixSearchForDeal"
+                    >
+                      <el-icon><Search /></el-icon>
+                      Поиск в Bitrix24
+                    </el-button>
+                  </div>
+                </el-form-item>
+              </el-col>
+            </el-row>
+
+            <el-row :gutter="20">
               <el-col :span="12">
                 <el-form-item label="Название КП *" prop="proposal_name">
                   <el-input v-model="formData.proposal_name" placeholder="Введите название КП" />
@@ -203,13 +239,14 @@
 
             <el-row :gutter="20">
               <el-col :span="12">
-                <el-form-item label="Клиент *" prop="client_id">
+                <el-form-item label="Клиент" prop="client_id">
                   <div class="client-select-row">
                     <el-select
                       v-model="formData.client_id"
                       filterable
-                      placeholder="Выберите клиента"
+                      placeholder="Подтягивается из сделки или выберите"
                       style="flex: 1;"
+                      clearable
                     >
                       <el-option
                         v-for="client in clients"
@@ -222,7 +259,7 @@
                       type="primary"
                       plain
                       class="bitrix-search-btn"
-                      title="Поиск в Bitrix24"
+                      title="Поиск компании в Bitrix24"
                       @click="openBitrixSearch"
                     >
                       <el-icon><Search /></el-icon>
@@ -964,7 +1001,9 @@
     <!-- Bitrix24 search modal -->
     <BitrixSearchModal
       v-model="bitrixSearchVisible"
+      :default-tab="bitrixDefaultTab"
       @select="onBitrixClientSelected"
+      @select-deal="onBitrixDealSelected"
     />
 
   </div>
@@ -988,6 +1027,7 @@ import {
 import { exchangeRatesAPI } from '@/api/exchangeRates'
 import { equipmentListItemsAPI } from '@/api/proposals'
 import { clientsAPI, type Client } from '@/api/clients'
+import { dealsAPI, type CrmDeal } from '@/api/deals'
 import { equipmentAPI, type Equipment } from '@/api/equipment'
 import BitrixSearchModal from '@/components/BitrixSearchModal.vue'
 import { formatPrice } from '@/utils/formatters'
@@ -1071,6 +1111,7 @@ const filters = reactive({ client_id: null, proposal_status: null })
 const includeInactive = ref(false)
 
 const clients = ref<Client[]>([])
+const deals = ref<CrmDeal[]>([])
 const additionalPrices = ref<AdditionalPrice[]>([])
 const liveRates = ref<any[]>([]) // Store live rates from API
 const equipmentList = ref<Equipment[]>([]) // All available equipment
@@ -1112,7 +1153,8 @@ const formRef = ref<FormInstance>()
 const formData = reactive<CommercialProposalCreateData>({
   proposal_name: '',
   outcoming_number: '',
-  client_id: 0,
+  deal_id: null,
+  client_id: null,
   currency_ticket: 'KZT',
   exchange_rate: '1',
   total_price: '0',
@@ -1125,21 +1167,50 @@ const formData = reactive<CommercialProposalCreateData>({
   // ... other fields set defaults
 })
 
+const bitrixDefaultTab = ref<'name' | 'contact' | 'requisite' | 'deal'>('deal')
+
 // Rules
 const formRules: FormRules = {
   proposal_name: [{ required: true, message: 'Обязательное поле', trigger: 'blur' }],
   outcoming_number: [{ required: true, message: 'Обязательное поле', trigger: 'blur' }],
-  client_id: [{ required: true, message: 'Выберите клиента', trigger: 'change' }],
+  deal_id: [{ required: true, message: 'Выберите сделку в Bitrix24', trigger: 'change' }],
 }
 
-// Bitrix24 search
-const openBitrixSearch = () => {
+// Bitrix24 search — для выбора сделки (в начале формы)
+const openBitrixSearchForDeal = () => {
+  bitrixDefaultTab.value = 'deal'
   bitrixSearchVisible.value = true
+}
+
+// Bitrix24 search — для выбора клиента (компании)
+const openBitrixSearch = () => {
+  bitrixDefaultTab.value = 'name'
+  bitrixSearchVisible.value = true
+}
+
+const onBitrixDealSelected = async (payload: { deal_id: number; client_id: number | null; deal_title: string }) => {
+  formData.deal_id = payload.deal_id
+  formData.client_id = payload.client_id ?? null
+  try {
+    // Обновляем списки из локальной БД (как для клиентов) — сделка уже сохранена бэкендом
+    const [dealsRes, clientRes] = await Promise.all([
+      dealsAPI.getList(),
+      clientsAPI.getClients(),
+    ])
+    deals.value = dealsRes
+    if ('results' in clientRes && clientRes.results) {
+      clients.value = clientRes.results
+    } else if (Array.isArray(clientRes)) {
+      clients.value = clientRes
+    }
+  } catch (e) {
+    console.error('Failed to refresh deals/clients:', e)
+  }
+  ElMessage.success('Сделка выгружена в локальную БД' + (payload.client_id ? ', компания подтянута' : ''))
 }
 
 const onBitrixClientSelected = async (clientId: number) => {
   formData.client_id = clientId
-  // Refresh clients list so the new/updated client appears in select
   try {
     const clientRes = await clientsAPI.getClients()
     if ('results' in clientRes && clientRes.results) {
@@ -1238,6 +1309,13 @@ const loadData = async () => {
             clients.value = clientRes
         }
 
+        try {
+            deals.value = await dealsAPI.getList()
+        } catch (e) {
+            console.error('Failed to load deals:', e)
+            deals.value = []
+        }
+
         const equipRes = await equipmentAPI.getEquipment()
         if ('results' in equipRes && equipRes.results) {
             equipmentList.value = equipRes.results
@@ -1287,7 +1365,8 @@ const handleCreate = async () => {
         proposal_id: undefined, // Ensure ID is cleared
         proposal_name: '', 
         outcoming_number: '', 
-        client_id: undefined,
+        deal_id: null,
+        client_id: null,
         proposal_date: new Date().toISOString().split('T')[0] || '',
         valid_until: undefined,
         total_price: '0', 
@@ -1812,7 +1891,8 @@ const handleEdit = async (row: CommercialProposal) => {
         formData.proposal_id = fullProp.proposal_id
         formData.proposal_name = fullProp.proposal_name
         formData.outcoming_number = fullProp.outcoming_number
-        formData.client_id = fullProp.client?.client_id
+        formData.deal_id = fullProp.deal?.id ?? null
+        formData.client_id = fullProp.client?.client_id ?? null
         formData.proposal_date = fullProp.proposal_date
         formData.valid_until = fullProp.valid_until
         formData.delivery_time = fullProp.delivery_time
@@ -2054,7 +2134,7 @@ const handleSubmit = async () => {
             ElMessage.warning('Пожалуйста, заполните все обязательные поля корректно')
             
             // Switch to basic tab if main fields have errors
-            if (fields && (fields.proposal_name || fields.outcoming_number || fields.client_id)) {
+            if (fields && (fields.proposal_name || fields.outcoming_number || fields.deal_id || fields.client_id)) {
                 activeTab.value = 'basic'
             }
         }
@@ -2256,4 +2336,5 @@ onMounted(async () => {
 .client-select-row { display: flex; align-items: center; gap: 8px; width: 100%; }
 .client-select-row .el-select { flex: 1; min-width: 0; }
 .bitrix-search-btn { flex-shrink: 0; }
+.option-meta { color: #909399; font-size: 12px; }
 </style>

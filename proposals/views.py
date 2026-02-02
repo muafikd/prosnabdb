@@ -34,8 +34,8 @@ from .models import (
     User, Client, Category, Manufacturer, EquipmentTypes, EquipmentDetails,
     EquipmentSpecification, EquipmentTechProcess, Equipment, PurchasePrice,
     Logistics, EquipmentDocument, EquipmentLine, EquipmentLineItem, AdditionalPrices,
-    EquipmentList, EquipmentListLineItem, EquipmentListItem, PaymentLog, CommercialProposal,
-    ExchangeRate, CostCalculation, ProposalTemplate, SectionTemplate, SystemSettings
+    EquipmentList, EquipmentListLineItem, EquipmentListItem, PaymentLog, CrmDeal,
+    CommercialProposal, ExchangeRate, CostCalculation, ProposalTemplate, SectionTemplate, SystemSettings
 )
 from .serializers import (
     UserRegistrationSerializer, UserLoginSerializer, UserSerializer, UserAdminUpdateSerializer,
@@ -46,9 +46,8 @@ from .serializers import (
     EquipmentDocumentSerializer, EquipmentLineSerializer, EquipmentLineItemSerializer,
     AdditionalPricesSerializer, EquipmentListSerializer, EquipmentListLineItemSerializer,
     EquipmentListItemSerializer, PaymentLogSerializer, CommercialProposalSerializer,
-    EquipmentListItemSerializer, PaymentLogSerializer, CommercialProposalSerializer,
     ExchangeRateSerializer, CostCalculationSerializer, CostCalculationRequestSerializer, ProposalTemplateSerializer,
-    SectionTemplateSerializer
+    SectionTemplateSerializer, CrmDealSerializer
 )
 from .services import CostCalculationService, DataAggregatorService
 from core.services.exchange_rate_service import ExchangeRateService
@@ -215,18 +214,13 @@ class ClientListView(generics.ListCreateAPIView):
     permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
     
     def get_queryset(self):
-        """Return all clients, optionally filtered by search."""
+        """Return all clients, optionally filtered by search (имя клиента или название компании)."""
         queryset = Client.objects.all()
-        
-        # Optional search by client name or company name
         search = self.request.query_params.get('search', None)
         if search:
             queryset = queryset.filter(
-                client_name__icontains=search
-            ) | queryset.filter(
-                client_company_name__icontains=search
+                Q(client_name__icontains=search) | Q(client_company_name__icontains=search)
             )
-        
         return queryset.order_by('-created_at')
 
 
@@ -1237,7 +1231,7 @@ class CommercialProposalListView(generics.ListCreateAPIView):
     POST /api/commercial-proposals/ - Create a new commercial proposal
     """
     queryset = CommercialProposal.objects.select_related(
-        'client', 'user', 'updated_by', 'parent_proposal'
+        'client', 'deal', 'user', 'updated_by', 'parent_proposal'
     ).prefetch_related(
         'payment_logs', 'equipment_lists'
     ).all()
@@ -1276,7 +1270,7 @@ class CommercialProposalListView(generics.ListCreateAPIView):
     def get_queryset(self):
         """Return all commercial proposals, optionally filtered by search or filters."""
         queryset = CommercialProposal.objects.select_related(
-            'client', 'user', 'updated_by', 'parent_proposal'
+            'client', 'deal', 'user', 'updated_by', 'parent_proposal'
         ).prefetch_related(
             'payment_logs', 'equipment_lists'
         ).all()
@@ -1350,7 +1344,7 @@ class CommercialProposalDetailView(generics.RetrieveUpdateDestroyAPIView):
     DELETE /api/commercial-proposals/{id}/ - Delete commercial proposal
     """
     queryset = CommercialProposal.objects.select_related(
-        'client', 'user', 'updated_by', 'parent_proposal'
+        'client', 'deal', 'user', 'updated_by', 'parent_proposal'
     ).prefetch_related(
         'payment_logs', 'equipment_lists'
     ).all()
@@ -3054,8 +3048,8 @@ class BitrixCheckConnectionView(APIView):
 
 class BitrixSearchView(APIView):
     """
-    GET /api/bitrix/search/?type=name|contact|requisite&q=... - Search Bitrix24.
-    type: name (by company title), contact (by contact name/phone), requisite (by IIN/BIN).
+    GET /api/bitrix/search/?type=name|contact|requisite|deal&q=... - Search Bitrix24.
+    type: name (company title), contact (contact name/phone), requisite (IIN/BIN), deal (название сделки).
     q: search query (min 3 chars). Uses saved bitrix_webhook_url.
     """
     permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
@@ -3075,24 +3069,218 @@ class BitrixSearchView(APIView):
             ok, result = bitrix_client.search_contacts_for_companies(url, q, limit=20)
         elif search_type == 'requisite':
             ok, result = bitrix_client.search_companies_by_requisite(url, q, limit=20)
+        elif search_type == 'deal':
+            ok, result = bitrix_client.search_deals_by_title(url, q, limit=20)
         else:
-            return Response({'error': 'Неверный type: name, contact или requisite'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'error': 'Неверный type: name, contact, requisite или deal'}, status=status.HTTP_400_BAD_REQUEST)
         if not ok:
             return Response({'error': result}, status=status.HTTP_400_BAD_REQUEST)
         return Response({'results': result or []}, status=status.HTTP_200_OK)
 
 
+class CrmDealListView(generics.ListAPIView):
+    """
+    GET /api/deals/ - List all imported Bitrix deals (read-only).
+    """
+    queryset = CrmDeal.objects.all().select_related('client').prefetch_related('commercial_proposals')
+    serializer_class = CrmDealSerializer
+    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+
+
+class CrmDealDetailView(generics.RetrieveAPIView):
+    """
+    GET /api/deals/<id>/ - Retrieve a single deal (read-only).
+    """
+    queryset = CrmDeal.objects.all().select_related('client').prefetch_related('commercial_proposals')
+    serializer_class = CrmDealSerializer
+    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+
+
+def _import_company_from_bitrix(webhook_url, bitrix_id):
+    """
+    Import or update Client from Bitrix company ID.
+    Returns (client, None) on success or (None, error_message) on failure.
+    """
+    ok, company = bitrix_client.get_company_by_id(webhook_url, bitrix_id)
+    if not ok:
+        return None, company
+    if not company or not isinstance(company, dict):
+        return None, 'Компания не найдена в Bitrix24'
+    ok_req, requisites = bitrix_client.get_company_requisites(webhook_url, bitrix_id)
+    req = requisites[0] if (ok_req and isinstance(requisites, list) and requisites and isinstance(requisites[0], dict)) else {}
+    title = (company.get('TITLE') or company.get('title') or '').strip()
+    phone = company.get('PHONE')
+    if isinstance(phone, list) and phone:
+        p0 = phone[0]
+        phone = (p0.get('VALUE') or p0.get('Value') or str(p0)) if isinstance(p0, dict) else str(p0)
+    else:
+        phone = (phone or '') if isinstance(phone, str) else str(phone or '')
+    phone = phone.strip()[:20] if phone else None
+    email = company.get('EMAIL')
+    if isinstance(email, list) and email:
+        e0 = email[0]
+        email = (e0.get('VALUE') or e0.get('Value') or str(e0)) if isinstance(e0, dict) else str(e0)
+    else:
+        email = (email or '') if isinstance(email, str) else str(email or '')
+    email = email.strip()[:254] if email else None
+    if email and '@' not in email:
+        email = None
+    address = company.get('ADDRESS') or company.get('ADDRESS_LEGAL') or req.get('RQ_ADDR') or req.get('RQ_BANK_ADDR') or ''
+    if isinstance(address, list) and address:
+        address = address[0]
+    if isinstance(address, dict):
+        address = (address.get('VALUE') or address.get('postalAddress') or address.get('Value') or '').strip()
+    else:
+        address = (str(address) if address else '').strip()
+    bin_iin = (
+        (company.get('UF_CRM_LEGALENTITY_INN') or company.get('UF_CRM_1657870237252') or
+         company.get('UF_CRM_COMPANY_INN') or req.get('RQ_INN') or '')
+    ).strip()[:20] or None
+    bik = (req.get('RQ_BIK') or '').strip()[:500] or None
+    iik = (req.get('RQ_ACC_NUM') or req.get('RQ_IIK') or '').strip()[:500] or None
+    bankname = (req.get('RQ_BANK_NAME') or '').strip()[:255] or None
+    client_name = (title or f'Bitrix #{bitrix_id}')[:255]
+    address_clean = address[:500] if address else None
+    defaults = {
+        'client_name': client_name,
+        'client_company_name': title[:255] if title else None,
+        'client_phone': phone,
+        'client_email': email,
+        'client_bin_iin': bin_iin,
+        'client_address': address_clean,
+        'client_bik': bik,
+        'client_iik': iik,
+        'client_bankname': bankname,
+    }
+    try:
+        client, _ = Client.objects.update_or_create(bitrix_id=bitrix_id, defaults=defaults)
+        return client, None
+    except Exception as e:
+        logging.getLogger(__name__).exception("Bitrix import client failed")
+        return None, str(e)
+
+
+class BitrixSelectDealView(APIView):
+    """
+    POST /api/bitrix/select-deal/ - Select a Bitrix deal: save/update CrmDeal locally,
+    optionally import company and link to deal. Returns { deal_id, client_id?, deal_title }.
+    Body: { "bitrix_deal_id": 456 }.
+    """
+    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+
+    def post(self, request, *args, **kwargs):
+        bitrix_deal_id = request.data.get('bitrix_deal_id')
+        if bitrix_deal_id is None:
+            return Response({'error': 'Укажите bitrix_deal_id'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            bitrix_deal_id = int(bitrix_deal_id)
+        except (TypeError, ValueError):
+            return Response({'error': 'bitrix_deal_id должен быть числом'}, status=status.HTTP_400_BAD_REQUEST)
+        settings = SystemSettings.get_settings()
+        url = (settings.bitrix_webhook_url or '').strip()
+        if not url:
+            return Response({'error': 'URL вебхука Bitrix24 не задан в настройках'}, status=status.HTTP_400_BAD_REQUEST)
+        ok_deal, deal = bitrix_client.get_deal_by_id(url, bitrix_deal_id)
+        if not ok_deal:
+            return Response({'error': deal}, status=status.HTTP_400_BAD_REQUEST)
+        if not deal or not isinstance(deal, dict):
+            return Response({'error': 'Сделка не найдена в Bitrix24'}, status=status.HTTP_404_NOT_FOUND)
+        deal_id_str = str(bitrix_deal_id)
+        title = (deal.get('TITLE') or deal.get('title') or f'Сделка #{bitrix_deal_id}')[:500]
+        stage_id = (deal.get('STAGE_ID') or deal.get('stageId') or '')[:100]
+        category_id = deal.get('CATEGORY_ID') or deal.get('categoryId')
+        stage_title = None
+        if stage_id:
+            ok_stage, stage_title = bitrix_client.get_deal_stage_name(url, stage_id, category_id)
+            if not ok_stage:
+                logging.getLogger(__name__).warning("Bitrix select-deal: stage name resolve failed: %s", stage_title)
+            stage_title = (stage_title or '')[:255] if stage_title else ''
+        company_id = deal.get('COMPANY_ID') or deal.get('companyId')
+        contact_id = deal.get('CONTACT_ID') or deal.get('contactId')
+        bitrix_company_id = str(company_id) if company_id else None
+        bitrix_contact_id = str(contact_id) if contact_id else None
+        contact_name = None
+        contact_phone = None
+        if contact_id:
+            ok_contact, contact = bitrix_client.get_contact_by_id(url, contact_id)
+            if ok_contact and contact and isinstance(contact, dict):
+                contact_name = (contact.get('NAME') or contact.get('name') or '')[:255]
+                if not contact_name and (contact.get('LAST_NAME') or contact.get('lastName')):
+                    contact_name = (contact.get('LAST_NAME') or contact.get('lastName'))[:255]
+                # Телефон контакта: в Bitrix PHONE может быть списком [{VALUE: "..."}] или строкой
+                phone_raw = contact.get('PHONE') or contact.get('phone')
+                if isinstance(phone_raw, list) and phone_raw:
+                    p0 = phone_raw[0]
+                    contact_phone = (p0.get('VALUE') or p0.get('Value') or str(p0)) if isinstance(p0, dict) else str(p0)
+                elif isinstance(phone_raw, str) and phone_raw.strip():
+                    contact_phone = phone_raw.strip()
+                if contact_phone:
+                    contact_phone = contact_phone[:50]
+        client = None
+        if company_id:
+            try:
+                company_id_int = int(company_id)
+            except (TypeError, ValueError):
+                pass
+            else:
+                client, err = _import_company_from_bitrix(url, company_id_int)
+                if err:
+                    logging.getLogger(__name__).warning("Bitrix select-deal: company import failed: %s", err)
+        try:
+            crm_deal, _ = CrmDeal.objects.update_or_create(
+                bitrix_deal_id=deal_id_str,
+                defaults={
+                    'title': title,
+                    'stage_id': stage_id or '',
+                    'stage_title': stage_title or '',
+                    'bitrix_company_id': bitrix_company_id,
+                    'bitrix_contact_id': bitrix_contact_id,
+                    'contact_name': contact_name or '',
+                    'contact_phone': contact_phone or '',
+                    'client': client,
+                }
+            )
+        except Exception as e:
+            logging.getLogger(__name__).exception("Bitrix select-deal: CrmDeal save failed")
+            return Response({'error': f'Ошибка сохранения сделки: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return Response({
+            'deal_id': crm_deal.id,
+            'client_id': crm_deal.client_id,
+            'deal_title': crm_deal.title,
+        }, status=status.HTTP_200_OK)
+
+
 class BitrixImportClientView(APIView):
     """
-    POST /api/bitrix/import-client/ - Import company from Bitrix24 by bitrix_id.
-    Body: { "bitrix_id": 123 }. Creates or updates local Client, returns { "client_id": ... }.
+    POST /api/bitrix/import-client/ - Import company from Bitrix24.
+    Body: { "bitrix_id": 123 } — ID компании, или { "bitrix_deal_id": 456 } — ID сделки (импорт компании сделки).
+    Creates or updates local Client, returns { "client_id": ... }.
     """
     permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
 
     def post(self, request, *args, **kwargs):
         bitrix_id = request.data.get('bitrix_id')
+        bitrix_deal_id = request.data.get('bitrix_deal_id')
+        if bitrix_deal_id is not None:
+            try:
+                bitrix_deal_id = int(bitrix_deal_id)
+            except (TypeError, ValueError):
+                return Response({'error': 'bitrix_deal_id должен быть числом'}, status=status.HTTP_400_BAD_REQUEST)
+            settings = SystemSettings.get_settings()
+            url = (settings.bitrix_webhook_url or '').strip()
+            if not url:
+                return Response({'error': 'URL вебхука Bitrix24 не задан в настройках'}, status=status.HTTP_400_BAD_REQUEST)
+            ok_deal, deal = bitrix_client.get_deal_by_id(url, bitrix_deal_id)
+            if not ok_deal:
+                return Response({'error': deal}, status=status.HTTP_400_BAD_REQUEST)
+            if not deal or not isinstance(deal, dict):
+                return Response({'error': 'Сделка не найдена в Bitrix24'}, status=status.HTTP_404_NOT_FOUND)
+            company_id = deal.get('COMPANY_ID') or deal.get('companyId')
+            if not company_id:
+                return Response({'error': 'У сделки не привязана компания'}, status=status.HTTP_400_BAD_REQUEST)
+            bitrix_id = company_id
         if bitrix_id is None:
-            return Response({'error': 'bitrix_id обязателен'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'error': 'Укажите bitrix_id (компания) или bitrix_deal_id (сделка)'}, status=status.HTTP_400_BAD_REQUEST)
         try:
             bitrix_id = int(bitrix_id)
         except (TypeError, ValueError):
