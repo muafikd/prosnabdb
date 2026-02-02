@@ -61,7 +61,7 @@ services:
   beat:
     build: .
     container_name: project_prosnab_beat
-    command: celery -A prosnabdb beat -l info
+    command: celery -A prosnabdb beat -l info -s /tmp/celerybeat-schedule --pidfile /tmp/celerybeat.pid
     volumes:
       - .:/app
     environment:

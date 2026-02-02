@@ -156,7 +156,7 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: ${COMPOSE_PROJECT_NAME:-prosnab}_beat
-    command: celery -A prosnabdb beat -l info
+    command: celery -A prosnabdb beat -l info -s /tmp/celerybeat-schedule --pidfile /tmp/celerybeat.pid
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:

@@ -97,7 +97,7 @@
         <el-table-column prop="equipment_name" label="Название" sortable min-width="200" />
         <el-table-column prop="equipment_articule" label="Артикул" width="120" />
         <el-table-column prop="equipment_uom" label="Ед. изм." width="100" />
-        <el-table-column label="Актуальная цена (KZT)" width="150" sortable>
+        <el-table-column label="Цена продажи KZT" width="150" sortable>
           <template #default="{ row }">
             <span v-if="row.sale_price_kzt !== null && row.sale_price_kzt !== undefined">
               {{ formatPrice(row.sale_price_kzt, 'KZT') }}
@@ -133,7 +133,7 @@
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="equipment_manufacture_price" label="Цена" width="120">
+        <el-table-column prop="equipment_manufacture_price" label="Цена (З) в валюте" width="150">
           <template #default="{ row }">
             {{ formatPrice(row.equipment_manufacture_price, row.equipment_price_currency_type) }}
           </template>

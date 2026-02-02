@@ -3606,15 +3606,18 @@ class DashboardActiveProposalsView(APIView):
             else:
                 payment_percentage = 0.0
             
+            # client может быть None (null=True в модели)
+            client = proposal.client
+            client_data = {
+                'client_id': client.client_id if client else None,
+                'client_name': client.client_name if client else '',
+                'client_company_name': (client.client_company_name or '') if client else '',
+            }
             proposals_list.append({
                 'proposal_id': proposal.proposal_id,
                 'outcoming_number': proposal.outcoming_number,
                 'proposal_name': proposal.proposal_name,
-                'client': {
-                    'client_id': proposal.client.client_id,
-                    'client_name': proposal.client.client_name,
-                    'client_company_name': proposal.client.client_company_name or '',
-                },
+                'client': client_data,
                 'proposal_status': proposal.proposal_status,
                 'proposal_status_label': status_labels.get(proposal.proposal_status, proposal.proposal_status),
                 'total_sum': str(total_sum_kzt),
