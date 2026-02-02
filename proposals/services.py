@@ -1725,9 +1725,11 @@ class ExportService:
         
         rows = ""
         for s in services:
+            # В форме: name = "Название", description = "Описание". Показываем как в конструкторе: description || name
+            title = s.get('description') or s.get('name', '') or ''
             rows += f"""
             <tr>
-                <td style="width: {desc_width}px; border: 1px solid #333; padding: 2px;">{s.get('description', '')}</td>
+                <td style="width: {desc_width}px; border: 1px solid #333; padding: 2px;">{title}</td>
                 <td style="text-align: right; border: 1px solid #333; padding: 2px;">{float(s.get('price', 0)):,.2f} {currency}</td>
             </tr>
             """
@@ -2279,7 +2281,9 @@ class ExportService:
         
         for s in services:
             row_cells = table.add_row().cells
-            row_cells[0].text = s.get('description', '')
+            # В форме: name = "Название", description = "Описание". Показываем как в конструкторе: description || name
+            title = s.get('description') or s.get('name', '') or ''
+            row_cells[0].text = title
             row_cells[0].paragraphs[0].runs[0].font.size = Pt(8)
             price_text = f"{float(s.get('price', 0)):,.2f} {currency}"
             row_cells[1].text = price_text
