@@ -93,6 +93,7 @@ class Client(models.Model):
     client_bik = models.TextField(null=True, blank=True, verbose_name='БИК')
     client_iik = models.TextField(null=True, blank=True, verbose_name='ИИК')
     client_bankname = models.CharField(max_length=255, null=True, blank=True, verbose_name='Название банка')
+    bitrix_id = models.IntegerField(null=True, blank=True, unique=True, verbose_name='ID компании в Bitrix24')
     created_at = models.DateTimeField(auto_now_add=True, verbose_name='Дата создания')
     updated_at = models.DateTimeField(auto_now=True, verbose_name='Дата обновления')
     
@@ -1125,6 +1126,7 @@ class SystemSettings(models.Model):
     Singleton model for system-wide settings (branding, logo, etc.)
     """
     company_logo = models.ImageField(upload_to='company/', null=True, blank=True, verbose_name='Логотип компании')
+    bitrix_webhook_url = models.URLField(max_length=512, null=True, blank=True, verbose_name='URL вебхука Bitrix24')
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:

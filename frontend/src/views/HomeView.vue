@@ -15,6 +15,26 @@
             </el-button>
           </div>
         </div>
+
+        <!-- Интеграция Bitrix24 (для суперпользователя или роли Администратор) -->
+        <div v-if="canManageBitrix" class="bitrix-section">
+          <el-divider />
+          <h3>Интеграция Bitrix24</h3>
+          <div class="bitrix-widget">
+            <el-input
+              v-model="bitrixWebhookUrl"
+              placeholder="URL вебхука Bitrix24 (например: https://ваш-портал.bitrix24.com/rest/1/код/)"
+              clearable
+              style="max-width: 500px; margin-right: 12px;"
+            />
+            <el-button type="primary" :loading="bitrixChecking" @click="saveBitrixUrlAndCheck">
+              Проверить связь
+            </el-button>
+          </div>
+          <p v-if="bitrixCheckMessage" class="bitrix-message" :class="bitrixCheckSuccess ? 'success' : 'error'">
+            {{ bitrixCheckMessage }}
+          </p>
+        </div>
         
         <el-divider />
         
@@ -91,18 +111,31 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { useRouter } from 'vue-router'
 import { Box, Document, DataBoard, Picture } from '@element-plus/icons-vue'
 import axios from 'axios'
 import Cookies from 'js-cookie'
 import { ElMessage } from 'element-plus'
+import { bitrixAPI } from '@/api/bitrix'
 
 const authStore = useAuthStore()
 const router = useRouter()
 const logoDialogOpen = ref(false)
 const logoUrl = ref('')
+
+// Виджет Bitrix24: суперпользователь или роль «Администратор»
+const canManageBitrix = computed(() => {
+  const u = authStore.user
+  if (!u) return false
+  return !!(u.is_superuser || u.user_role === 'Администратор')
+})
+
+const bitrixWebhookUrl = ref('')
+const bitrixChecking = ref(false)
+const bitrixCheckMessage = ref('')
+const bitrixCheckSuccess = ref(false)
 
 const fetchLogo = async () => {
   try {
@@ -135,8 +168,41 @@ const handleLogoChange = async (file: any) => {
   }
 }
 
+const loadBitrixSettings = async () => {
+  if (!canManageBitrix.value) return
+  try {
+    const data = await bitrixAPI.getSystemSettings()
+    bitrixWebhookUrl.value = data.bitrix_webhook_url || ''
+  } catch (e) {
+    console.error('Failed to load Bitrix settings:', e)
+  }
+}
+
+const saveBitrixUrlAndCheck = async () => {
+  if (!canManageBitrix.value) return
+  bitrixChecking.value = true
+  bitrixCheckMessage.value = ''
+  try {
+    await bitrixAPI.updateSystemSettings({ bitrix_webhook_url: bitrixWebhookUrl.value })
+    const res = await bitrixAPI.checkConnection(bitrixWebhookUrl.value || undefined)
+    if (res.ok) {
+      bitrixCheckSuccess.value = true
+      bitrixCheckMessage.value = 'Связь с Bitrix24 успешна.'
+    } else {
+      bitrixCheckSuccess.value = false
+      bitrixCheckMessage.value = res.error || 'Ошибка проверки связи'
+    }
+  } catch (e: any) {
+    bitrixCheckSuccess.value = false
+    bitrixCheckMessage.value = e.response?.data?.error || e.message || 'Ошибка при проверке связи'
+  } finally {
+    bitrixChecking.value = false
+  }
+}
+
 onMounted(async () => {
   await fetchLogo()
+  await loadBitrixSettings()
 })
 </script>
 
@@ -252,5 +318,34 @@ onMounted(async () => {
   margin-top: 10px;
   color: #909399;
   font-size: 12px;
+}
+
+.bitrix-section {
+  margin: 20px 0;
+}
+
+.bitrix-section h3 {
+  margin-bottom: 12px;
+  color: #303133;
+}
+
+.bitrix-widget {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.bitrix-message {
+  margin-top: 12px;
+  font-size: 14px;
+}
+
+.bitrix-message.success {
+  color: #67c23a;
+}
+
+.bitrix-message.error {
+  color: #f56c6c;
 }
 </style>

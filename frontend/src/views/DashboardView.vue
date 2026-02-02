@@ -215,6 +215,7 @@ const loading = ref(false)
 const loadingProposals = ref(false)
 const activeProposals = ref<ActiveProposal[]>([])
 
+
 // Date range for filtering proposals (default to current month)
 const getCurrentMonthRange = (): [string, string] => {
   const now = new Date()

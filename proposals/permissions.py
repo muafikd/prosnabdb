@@ -28,3 +28,12 @@ class IsAdmin(permissions.BasePermission):
             return False
         return request.user.user_role == 'Администратор'
 
+
+class IsSuperuser(permissions.BasePermission):
+    """Allows access only to superuser (is_superuser=True)."""
+
+    def has_permission(self, request, view):
+        if not request.user or not request.user.is_authenticated:
+            return False
+        return getattr(request.user, 'is_superuser', False)
+

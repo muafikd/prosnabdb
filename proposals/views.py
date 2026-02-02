@@ -51,7 +51,7 @@ from .serializers import (
 )
 from .services import CostCalculationService, DataAggregatorService
 from core.services.exchange_rate_service import ExchangeRateService
-from .permissions import IsManagerOrAdmin, IsAdmin
+from .permissions import IsManagerOrAdmin, IsAdmin, IsSuperuser
 from .tasks import generate_pdf_task
 from celery.result import AsyncResult
 import requests
@@ -2999,6 +2999,152 @@ class SystemSettingsLogoView(APIView):
         settings.save()
         
         return Response({'url': settings.company_logo.url}, status=status.HTTP_200_OK)
+
+
+class SystemSettingsView(APIView):
+    """
+    GET /api/system-settings/ - Get system settings (bitrix_webhook_url). Authenticated.
+    PATCH /api/system-settings/ - Update system settings (bitrix_webhook_url). Superuser only.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request, *args, **kwargs):
+        settings = SystemSettings.get_settings()
+        return Response({
+            'bitrix_webhook_url': settings.bitrix_webhook_url or '',
+        }, status=status.HTTP_200_OK)
+
+    def patch(self, request, *args, **kwargs):
+        can_edit = getattr(request.user, 'is_superuser', False) or getattr(request.user, 'user_role', None) == 'Администратор'
+        if not can_edit:
+            return Response({'detail': 'Только суперпользователь или администратор может изменять настройки.'}, status=status.HTTP_403_FORBIDDEN)
+        settings = SystemSettings.get_settings()
+        url = request.data.get('bitrix_webhook_url')
+        if url is not None:
+            settings.bitrix_webhook_url = (url or '').strip() or None
+            settings.save()
+        return Response({
+            'bitrix_webhook_url': settings.bitrix_webhook_url or '',
+        }, status=status.HTTP_200_OK)
+
+
+from . import bitrix_client
+
+class BitrixCheckConnectionView(APIView):
+    """
+    POST /api/bitrix/check/ - Check Bitrix24 connection (crm.company.list limit 1).
+    Body: { "bitrix_webhook_url": "..." } optional; if omitted uses saved system setting.
+    Доступ: суперпользователь или роль Администратор.
+    """
+    permission_classes = [permissions.IsAuthenticated, IsAdmin]
+
+    def post(self, request, *args, **kwargs):
+        url = (request.data.get('bitrix_webhook_url') or '').strip()
+        if not url:
+            settings = SystemSettings.get_settings()
+            url = (settings.bitrix_webhook_url or '').strip()
+        if not url:
+            return Response({'ok': False, 'error': 'URL вебхука не задан'}, status=status.HTTP_400_BAD_REQUEST)
+        ok, result = bitrix_client.check_connection(url)
+        if ok:
+            return Response({'ok': True, 'result': result}, status=status.HTTP_200_OK)
+        return Response({'ok': False, 'error': result}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class BitrixSearchView(APIView):
+    """
+    GET /api/bitrix/search/?type=name|contact|requisite&q=... - Search Bitrix24.
+    type: name (by company title), contact (by contact name/phone), requisite (by IIN/BIN).
+    q: search query (min 3 chars). Uses saved bitrix_webhook_url.
+    """
+    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+
+    def get(self, request, *args, **kwargs):
+        search_type = (request.query_params.get('type') or 'name').strip().lower()
+        q = (request.query_params.get('q') or '').strip()
+        if len(q) < 3:
+            return Response({'results': []}, status=status.HTTP_200_OK)
+        settings = SystemSettings.get_settings()
+        url = (settings.bitrix_webhook_url or '').strip()
+        if not url:
+            return Response({'error': 'URL вебхука Bitrix24 не задан в настройках'}, status=status.HTTP_400_BAD_REQUEST)
+        if search_type == 'name':
+            ok, result = bitrix_client.search_companies_by_title(url, q, limit=20)
+        elif search_type == 'contact':
+            ok, result = bitrix_client.search_contacts_for_companies(url, q, limit=20)
+        elif search_type == 'requisite':
+            ok, result = bitrix_client.search_companies_by_requisite(url, q, limit=20)
+        else:
+            return Response({'error': 'Неверный type: name, contact или requisite'}, status=status.HTTP_400_BAD_REQUEST)
+        if not ok:
+            return Response({'error': result}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({'results': result or []}, status=status.HTTP_200_OK)
+
+
+class BitrixImportClientView(APIView):
+    """
+    POST /api/bitrix/import-client/ - Import company from Bitrix24 by bitrix_id.
+    Body: { "bitrix_id": 123 }. Creates or updates local Client, returns { "client_id": ... }.
+    """
+    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+
+    def post(self, request, *args, **kwargs):
+        bitrix_id = request.data.get('bitrix_id')
+        if bitrix_id is None:
+            return Response({'error': 'bitrix_id обязателен'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            bitrix_id = int(bitrix_id)
+        except (TypeError, ValueError):
+            return Response({'error': 'bitrix_id должен быть числом'}, status=status.HTTP_400_BAD_REQUEST)
+        settings = SystemSettings.get_settings()
+        url = (settings.bitrix_webhook_url or '').strip()
+        if not url:
+            return Response({'error': 'URL вебхука Bitrix24 не задан в настройках'}, status=status.HTTP_400_BAD_REQUEST)
+        ok, company = bitrix_client.get_company_by_id(url, bitrix_id)
+        if not ok:
+            return Response({'error': company}, status=status.HTTP_400_BAD_REQUEST)
+        if not company or not isinstance(company, dict):
+            return Response({'error': 'Компания не найдена в Bitrix24'}, status=status.HTTP_404_NOT_FOUND)
+        # Get requisites for BIN, address, bank
+        _, requisites = bitrix_client.get_company_requisites(url, bitrix_id)
+        req = (requisites or [])[0] if requisites else {}
+        title = company.get('TITLE') or company.get('title') or ''
+        phone = company.get('PHONE')
+        if isinstance(phone, list) and phone:
+            phone = phone[0].get('VALUE') if isinstance(phone[0], dict) else str(phone[0])
+        elif not isinstance(phone, str):
+            phone = str(phone) if phone else ''
+        email = company.get('EMAIL')
+        if isinstance(email, list) and email:
+            email = email[0].get('VALUE') if isinstance(email[0], dict) else str(email[0])
+        elif not isinstance(email, str):
+            email = str(email) if email else ''
+        address = company.get('ADDRESS') or company.get('ADDRESS_LEGAL') or req.get('RQ_ADDR') or req.get('RQ_BANK_ADDR') or ''
+        if isinstance(address, dict):
+            address = address.get('VALUE') or address.get('postalAddress') or ''
+        bin_iin = (
+            company.get('UF_CRM_LEGALENTITY_INN') or company.get('UF_CRM_1657870237252') or
+            company.get('UF_CRM_COMPANY_INN') or req.get('RQ_INN') or ''
+        )
+        bik = req.get('RQ_BIK') or ''
+        iik = req.get('RQ_ACC_NUM') or req.get('RQ_IIK') or ''
+        bankname = req.get('RQ_BANK_NAME') or ''
+        client_name = title or f'Bitrix #{bitrix_id}'
+        client, created = Client.objects.update_or_create(
+            bitrix_id=bitrix_id,
+            defaults={
+                'client_name': client_name[:255],
+                'client_company_name': title[:255] if title else None,
+                'client_phone': phone[:20] if phone else None,
+                'client_email': email[:254] if email else None,
+                'client_bin_iin': (bin_iin or None)[:20] if bin_iin else None,
+                'client_address': (address or None)[:500] if address else None,
+                'client_bik': (bik or None)[:500] if bik else None,
+                'client_iik': (iik or None)[:500] if iik else None,
+                'client_bankname': (bankname or None)[:255] if bankname else None,
+            }
+        )
+        return Response({'client_id': client.client_id}, status=status.HTTP_200_OK)
 
 
 # Allowed hosts for image proxy (Google Drive, Yandex Disk) to avoid 403 when embedding

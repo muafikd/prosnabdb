@@ -204,19 +204,31 @@
             <el-row :gutter="20">
               <el-col :span="12">
                 <el-form-item label="Клиент *" prop="client_id">
-                  <el-select
-                    v-model="formData.client_id"
-                    filterable
-                    placeholder="Выберите клиента"
-                    style="width: 100%"
-                  >
-                    <el-option
-                      v-for="client in clients"
-                      :key="client.client_id"
-                      :label="client.client_name"
-                      :value="client.client_id"
-                    />
-                  </el-select>
+                  <div class="client-select-row">
+                    <el-select
+                      v-model="formData.client_id"
+                      filterable
+                      placeholder="Выберите клиента"
+                      style="flex: 1;"
+                    >
+                      <el-option
+                        v-for="client in clients"
+                        :key="client.client_id"
+                        :label="client.client_name"
+                        :value="client.client_id"
+                      />
+                    </el-select>
+                    <el-button
+                      type="primary"
+                      plain
+                      class="bitrix-search-btn"
+                      title="Поиск в Bitrix24"
+                      @click="openBitrixSearch"
+                    >
+                      <el-icon><Search /></el-icon>
+                      Bitrix24
+                    </el-button>
+                  </div>
                 </el-form-item>
               </el-col>
               <el-col :span="12">
@@ -949,6 +961,12 @@
        </template>
     </el-dialog>
 
+    <!-- Bitrix24 search modal -->
+    <BitrixSearchModal
+      v-model="bitrixSearchVisible"
+      @select="onBitrixClientSelected"
+    />
+
   </div>
 </template>
 
@@ -971,6 +989,7 @@ import { exchangeRatesAPI } from '@/api/exchangeRates'
 import { equipmentListItemsAPI } from '@/api/proposals'
 import { clientsAPI, type Client } from '@/api/clients'
 import { equipmentAPI, type Equipment } from '@/api/equipment'
+import BitrixSearchModal from '@/components/BitrixSearchModal.vue'
 import { formatPrice } from '@/utils/formatters'
 import { getImageSrc } from '@/utils/imageProxy'
 import { format } from 'date-fns'
@@ -1061,6 +1080,7 @@ const dialogVisible = ref(false)
 const isEditMode = ref(false)
 const activeTab = ref('basic')
 const submitting = ref(false)
+const bitrixSearchVisible = ref(false)
 
 // Equipment card dialog state
 const equipmentCardDialogVisible = ref(false)
@@ -1110,6 +1130,27 @@ const formRules: FormRules = {
   proposal_name: [{ required: true, message: 'Обязательное поле', trigger: 'blur' }],
   outcoming_number: [{ required: true, message: 'Обязательное поле', trigger: 'blur' }],
   client_id: [{ required: true, message: 'Выберите клиента', trigger: 'change' }],
+}
+
+// Bitrix24 search
+const openBitrixSearch = () => {
+  bitrixSearchVisible.value = true
+}
+
+const onBitrixClientSelected = async (clientId: number) => {
+  formData.client_id = clientId
+  // Refresh clients list so the new/updated client appears in select
+  try {
+    const clientRes = await clientsAPI.getClients()
+    if ('results' in clientRes && clientRes.results) {
+      clients.value = clientRes.results
+    } else if (Array.isArray(clientRes)) {
+      clients.value = clientRes
+    }
+  } catch (e) {
+    console.error('Failed to refresh clients:', e)
+  }
+  ElMessage.success('Клиент выбран из Bitrix24')
 }
 
 // Exchange Rates State
@@ -2212,4 +2253,7 @@ onMounted(async () => {
 .w-100 { width: 100%; }
 .mr-2 { margin-right: 8px; }
 .final-price-display { margin-top: 20px; font-size: 1.2em; border-top: 1px solid #eba4a4; padding-top: 10px; display: flex; justify-content: space-between; font-weight: bold; color: #F56C6C; }
+.client-select-row { display: flex; align-items: center; gap: 8px; width: 100%; }
+.client-select-row .el-select { flex: 1; min-width: 0; }
+.bitrix-search-btn { flex-shrink: 0; }
 </style>

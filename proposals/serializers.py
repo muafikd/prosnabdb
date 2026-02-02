@@ -141,7 +141,7 @@ class ClientSerializer(serializers.ModelSerializer):
             'client_id', 'client_name', 'client_phone', 'client_email',
             'client_company_name', 'client_type', 'client_bin_iin',
             'client_address', 'client_bik', 'client_iik', 'client_bankname',
-            'created_at', 'updated_at'
+            'bitrix_id', 'created_at', 'updated_at'
         ]
         read_only_fields = ['client_id', 'created_at', 'updated_at']
 

@@ -14,6 +14,7 @@ export interface Client {
   client_bik?: string
   client_iik?: string
   client_bankname?: string
+  bitrix_id?: number | null
   created_at: string
   updated_at: string
 }
