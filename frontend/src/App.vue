@@ -42,6 +42,12 @@
               <span>Клиенты</span>
             </template>
           </el-menu-item>
+          <el-menu-item index="/deals" v-if="authStore.isManager">
+            <el-icon><Document /></el-icon>
+            <template #title>
+              <span>Сделки Bitrix</span>
+            </template>
+          </el-menu-item>
           <el-menu-item index="/manufacturers" v-if="authStore.isManager">
             <el-icon><OfficeBuilding /></el-icon>
             <template #title>
@@ -52,12 +58,6 @@
             <el-icon><Document /></el-icon>
             <template #title>
               <span>КП</span>
-            </template>
-          </el-menu-item>
-          <el-menu-item index="/deals" v-if="authStore.isManager">
-            <el-icon><Document /></el-icon>
-            <template #title>
-              <span>Сделки Bitrix</span>
             </template>
           </el-menu-item>
           <el-menu-item index="/proposal-constructor" v-if="authStore.isAuthenticated">
