@@ -3007,6 +3007,7 @@ class SystemSettingsView(APIView):
         settings = SystemSettings.get_settings()
         return Response({
             'bitrix_webhook_url': settings.bitrix_webhook_url or '',
+            'satu_api_token': settings.satu_api_token or '',
         }, status=status.HTTP_200_OK)
 
     def patch(self, request, *args, **kwargs):
@@ -3017,13 +3018,20 @@ class SystemSettingsView(APIView):
         url = request.data.get('bitrix_webhook_url')
         if url is not None:
             settings.bitrix_webhook_url = (url or '').strip() or None
-            settings.save()
+            
+        satu_token = request.data.get('satu_api_token')
+        if satu_token is not None:
+            settings.satu_api_token = (satu_token or '').strip() or None
+            
+        settings.save()
         return Response({
             'bitrix_webhook_url': settings.bitrix_webhook_url or '',
+            'satu_api_token': settings.satu_api_token or '',
         }, status=status.HTTP_200_OK)
 
 
 from . import bitrix_client
+from . import satu_client
 
 class BitrixCheckConnectionView(APIView):
     """
@@ -3045,6 +3053,69 @@ class BitrixCheckConnectionView(APIView):
             return Response({'ok': True, 'result': result}, status=status.HTTP_200_OK)
         return Response({'ok': False, 'error': result}, status=status.HTTP_400_BAD_REQUEST)
 
+class SatuCheckConnectionView(APIView):
+    """
+    POST /api/satu/check/ - Check Satu.kz connection.
+    Body: { "satu_api_token": "..." } optional; if omitted uses saved system setting.
+    Доступ: суперпользователь или роль Администратор.
+    """
+    permission_classes = [permissions.IsAuthenticated, IsAdmin]
+
+    def post(self, request, *args, **kwargs):
+        token = (request.data.get('satu_api_token') or '').strip()
+        if not token:
+            settings = SystemSettings.get_settings()
+            token = (settings.satu_api_token or '').strip()
+        if not token:
+            return Response({'ok': False, 'error': 'API токен Satu.kz не задан'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        ok, result = satu_client.check_connection(token)
+        if ok:
+            return Response({'ok': True, 'result': result}, status=status.HTTP_200_OK)
+        return Response({'ok': False, 'error': result}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class EquipmentSatuExportView(APIView):
+    """
+    POST /api/satu/equipment/<id>/export/ - Export single equipment to Satu.
+    """
+    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+
+    def post(self, request, equipment_id, *args, **kwargs):
+        try:
+            equipment = Equipment.objects.get(pk=equipment_id)
+        except Equipment.DoesNotExist:
+            return Response({'ok': False, 'error': 'Оборудование не найдено'}, status=status.HTTP_404_NOT_FOUND)
+            
+        ok, result = satu_client.export_equipment(equipment)
+        if ok:
+            return Response({'ok': True, 'result': result}, status=status.HTTP_200_OK)
+        return Response({'ok': False, 'error': result}, status=status.HTTP_400_BAD_REQUEST)
+
+class EquipmentSatuBulkExportView(APIView):
+    """
+    POST /api/satu/equipment/export-bulk/ - Export multiple (all published) equipment to Satu.
+    """
+    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+
+    def post(self, request, *args, **kwargs):
+        equipment_list = list(Equipment.objects.filter(is_published=True))
+        
+        if not equipment_list:
+            return Response({'ok': False, 'error': 'Нет опубликованного оборудования для экспорта'}, status=status.HTTP_400_BAD_REQUEST)
+
+        ok, result = satu_client.export_equipment(equipment_list, is_bulk=True)
+        if ok:
+            return Response({
+                'ok': True,
+                'success_count': len(equipment_list),
+                'result': result
+            }, status=status.HTTP_200_OK)
+        else:
+            return Response({
+                'ok': False,
+                'errors': [result]
+            }, status=status.HTTP_400_BAD_REQUEST)
 
 class BitrixSearchView(APIView):
     """

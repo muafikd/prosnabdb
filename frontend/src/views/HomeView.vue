@@ -35,6 +35,26 @@
             {{ bitrixCheckMessage }}
           </p>
         </div>
+
+        <!-- Интеграция Satu.kz (для суперпользователя или роли Администратор) -->
+        <div v-if="canManageBitrix" class="bitrix-section">
+          <el-divider />
+          <h3>Интеграция Satu.kz</h3>
+          <div class="bitrix-widget">
+            <el-input
+              v-model="satuApiToken"
+              placeholder="API Токен Satu.kz (Bearer ключ)"
+              clearable
+              style="max-width: 500px; margin-right: 12px;"
+            />
+            <el-button type="primary" :loading="satuChecking" @click="saveSatuTokenAndCheck">
+              Сохранить токен
+            </el-button>
+          </div>
+          <p v-if="satuCheckMessage" class="bitrix-message" :class="satuCheckSuccess ? 'success' : 'error'">
+            {{ satuCheckMessage }}
+          </p>
+        </div>
         
         <el-divider />
         
@@ -119,6 +139,7 @@ import axios from 'axios'
 import Cookies from 'js-cookie'
 import { ElMessage } from 'element-plus'
 import { bitrixAPI } from '@/api/bitrix'
+import { satuAPI } from '@/api/satu'
 
 const authStore = useAuthStore()
 const router = useRouter()
@@ -136,6 +157,11 @@ const bitrixWebhookUrl = ref('')
 const bitrixChecking = ref(false)
 const bitrixCheckMessage = ref('')
 const bitrixCheckSuccess = ref(false)
+
+const satuApiToken = ref('')
+const satuChecking = ref(false)
+const satuCheckMessage = ref('')
+const satuCheckSuccess = ref(false)
 
 const fetchLogo = async () => {
   try {
@@ -168,13 +194,14 @@ const handleLogoChange = async (file: any) => {
   }
 }
 
-const loadBitrixSettings = async () => {
+const loadSystemSettings = async () => {
   if (!canManageBitrix.value) return
   try {
     const data = await bitrixAPI.getSystemSettings()
     bitrixWebhookUrl.value = data.bitrix_webhook_url || ''
+    satuApiToken.value = data.satu_api_token || ''
   } catch (e) {
-    console.error('Failed to load Bitrix settings:', e)
+    console.error('Failed to load system settings:', e)
   }
 }
 
@@ -200,9 +227,31 @@ const saveBitrixUrlAndCheck = async () => {
   }
 }
 
+const saveSatuTokenAndCheck = async () => {
+  if (!canManageBitrix.value) return
+  satuChecking.value = true
+  satuCheckMessage.value = ''
+  try {
+    await bitrixAPI.updateSystemSettings({ satu_api_token: satuApiToken.value })
+    const res = await satuAPI.checkConnection(satuApiToken.value || undefined)
+    if (res.ok) {
+      satuCheckSuccess.value = true
+      satuCheckMessage.value = 'Связь с Satu.kz успешна.'
+    } else {
+      satuCheckSuccess.value = false
+      satuCheckMessage.value = res.error || 'Ошибка проверки связи'
+    }
+  } catch (e: any) {
+    satuCheckSuccess.value = false
+    satuCheckMessage.value = e.response?.data?.error || e.message || 'Ошибка при сохранении токена'
+  } finally {
+    satuChecking.value = false
+  }
+}
+
 onMounted(async () => {
   await fetchLogo()
-  await loadBitrixSettings()
+  await loadSystemSettings()
 })
 </script>
 

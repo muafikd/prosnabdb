@@ -3,9 +3,16 @@ import type { AxiosResponse } from 'axios'
 
 export interface SystemSettingsResponse {
   bitrix_webhook_url: string
+  satu_api_token: string
 }
 
 export interface BitrixCheckResponse {
+  ok: boolean
+  result?: unknown
+  error?: string
+}
+
+export interface SatuCheckResponse {
   ok: boolean
   result?: unknown
   error?: string
@@ -46,7 +53,7 @@ export const bitrixAPI = {
     return response.data
   },
 
-  async updateSystemSettings(data: { bitrix_webhook_url: string }): Promise<SystemSettingsResponse> {
+  async updateSystemSettings(data: { bitrix_webhook_url?: string; satu_api_token?: string }): Promise<SystemSettingsResponse> {
     const response: AxiosResponse<SystemSettingsResponse> = await apiClient.patch('/system-settings/', data)
     return response.data
   },

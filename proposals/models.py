@@ -1171,6 +1171,7 @@ class SystemSettings(models.Model):
     """
     company_logo = models.ImageField(upload_to='company/', null=True, blank=True, verbose_name='Логотип компании')
     bitrix_webhook_url = models.URLField(max_length=512, null=True, blank=True, verbose_name='URL вебхука Bitrix24')
+    satu_api_token = models.CharField(max_length=255, null=True, blank=True, verbose_name='API Токен Satu.kz')
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:

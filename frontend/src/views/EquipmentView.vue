@@ -166,6 +166,14 @@
               @click="handleDelete(row)"
               circle
             />
+            <el-button
+              type="success"
+              size="small"
+              :icon="Upload"
+              @click="handleSatuExport(row)"
+              circle
+              title="Отправить в Satu.kz"
+            />
           </template>
         </el-table-column>
       </el-table>
@@ -263,6 +271,14 @@
                 @click="handleDelete(item)"
               >
                 Удалить
+              </el-button>
+              <el-button
+                type="success"
+                size="small"
+                :icon="Upload"
+                @click="handleSatuExport(item)"
+              >
+                В Satu.kz
               </el-button>
             </div>
           </div>
@@ -1054,7 +1070,7 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted, computed, nextTick } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
-import { Plus, Edit, Delete, Search, List, Grid, Picture, Link, Document, Loading } from '@element-plus/icons-vue'
+import { Plus, Edit, Delete, Search, List, Grid, Picture, Link, Document, Loading, Upload } from '@element-plus/icons-vue'
 import {
   equipmentAPI,
   categoriesAPI,
@@ -1082,8 +1098,10 @@ import { formatPrice, inputFormatter, inputParser } from '@/utils/formatters'
 import { getImageSrc } from '@/utils/imageProxy'
 import { useExchangeRateStore } from '@/stores/exchangeRate'
 import { exchangeRatesAPI } from '@/api/exchangeRates'
+import { satuAPI } from '@/api/satu'
 
 // State
+const satuBulkExporting = ref(false)
 const loading = ref(false)
 const submitting = ref(false)
 const equipmentList = ref<Equipment[]>([])
@@ -2479,6 +2497,60 @@ const handleCurrencyChange = async (value: string) => {
       console.error('Failed to add currency:', error)
       // Still allow the user to use the currency even if API call fails
     }
+  }
+}
+
+const handleSatuExport = async (item: Equipment) => {
+  if (!item.equipment_id) return
+  
+  try {
+    await ElMessageBox.confirm(`Отправить оборудование "${item.equipment_name}" в Satu.kz?`, 'Экспорт', {
+      confirmButtonText: 'Отправить',
+      cancelButtonText: 'Отмена',
+      type: 'info'
+    })
+  } catch {
+    return
+  }
+
+  try {
+    const res = await satuAPI.exportEquipment(item.equipment_id)
+    if (res.ok) {
+      ElMessage.success('Оборудование успешно отправлено в Satu.kz')
+    } else {
+      ElMessage.error(res.error || 'Ошибка экспорта')
+    }
+  } catch (e: any) {
+    ElMessage.error(e.response?.data?.error || e.message || 'Ошибка экспорта в Satu.kz')
+  }
+}
+
+const handleSatuBulkExport = async () => {
+  try {
+    await ElMessageBox.confirm('Вы действительно хотите отправить все опубликованные оборудования (включая неактивные) в Satu.kz?', 'Массовый экспорт', {
+      confirmButtonText: 'Отправить',
+      cancelButtonText: 'Отмена',
+      type: 'warning'
+    })
+  } catch {
+    return
+  }
+  
+  satuBulkExporting.value = true
+  try {
+    const res = await satuAPI.exportBulkEquipment()
+    if (res.ok) {
+      ElMessage.success(`Экспортировано ${res.success_count || 0} товаров.`)
+      if (res.errors && res.errors.length > 0) {
+        ElMessage.warning(`Были ошибки у некоторых товаров: ${res.errors.join(', ')}`)
+      }
+    } else {
+      ElMessage.error(res.errors?.join(', ') || 'Ошибки при экспорте')
+    }
+  } catch (e: any) {
+    ElMessage.error(e.response?.data?.error || e.message || 'Ошибка при экспорте в Satu.kz')
+  } finally {
+    satuBulkExporting.value = false
   }
 }
 
