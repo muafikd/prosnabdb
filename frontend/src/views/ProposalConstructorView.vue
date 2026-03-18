@@ -637,7 +637,7 @@ const insertSelectedTemplate = () => {
     // Add new block with template content
     templateBlocks.value.push({
         title: templateToInsert.value.title,
-        content: templateToInsert.value.text
+        content: (templateToInsert.value.text || '').replace(/\r\n/g, '\n')
     })
     
     selectTemplateVisible.value = false
@@ -1250,6 +1250,7 @@ onMounted(async () => {
     font-size: 11pt; /* Document font size */
     line-height: 1.5;
     border-radius: 4px;
+    white-space: pre-wrap;
 }
 .editable-text:focus {
     background: #fdf6ec;
