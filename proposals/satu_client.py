@@ -144,7 +144,8 @@ def export_equipment(equipment, is_bulk=False):
                     err_msg = error_data['error'].get('message', '')
                     if err_msg:
                         # Translate specific common API errors to user-friendly messages
-                        if "ограничение на запуск одновременных импортов" in err_msg:
+                        err_msg_lower = err_msg.lower()
+                        if "ограничение на запуск одновременных импортов" in err_msg_lower or "ограничение на запуск" in err_msg_lower:
                             return False, "Импорт товаров на портал Satu уже запущен. Пожалуйста, дождитесь завершения предыдущего процесса импорта."
                         return False, f"Ошибка Satu API: {err_msg}"
             except Exception:

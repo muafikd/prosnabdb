@@ -885,7 +885,8 @@
       </el-input>
 
       <el-table
-        :data="filteredEquipment"
+        v-loading="equipmentSearchLoading"
+        :data="equipmentSearchResults"
         max-height="400"
       >
         <el-table-column prop="equipment_name" label="Название" min-width="200" />
@@ -906,6 +907,19 @@
           </template>
         </el-table-column>
       </el-table>
+
+      <div
+        v-if="equipmentSearchTotal > equipmentSearchPageSize"
+        style="display: flex; justify-content: flex-end; margin-top: 12px;"
+      >
+        <el-pagination
+          v-model:current-page="equipmentSearchPage"
+          :page-size="equipmentSearchPageSize"
+          :total="equipmentSearchTotal"
+          layout="total, prev, pager, next"
+          @current-change="handleEquipmentSearchPageChange"
+        />
+      </div>
     </el-dialog>
 
     <!-- Диалог управления доп. расходами на строку (Row Expense) -->
@@ -1234,6 +1248,56 @@ const selectedEquipment = ref<EquipmentRow[]>([])
 const showAddEquipmentDialog = ref(false)
 const equipmentSearchQuery = ref('')
 
+// Server-side equipment search state (for "Добавить оборудование")
+const equipmentSearchResults = ref<Equipment[]>([])
+const equipmentSearchLoading = ref(false)
+const equipmentSearchPage = ref(1)
+const equipmentSearchTotal = ref(0)
+const equipmentSearchPageSize = ref(20)
+let equipmentSearchTimeout: ReturnType<typeof setTimeout> | null = null
+
+const fetchEquipmentSearch = async (page: number = 1) => {
+    equipmentSearchLoading.value = true
+    try {
+        const q = (equipmentSearchQuery.value || '').trim()
+        const resp = await equipmentAPI.getEquipment({ search: q || undefined, page })
+
+        if (resp && typeof resp === 'object' && 'results' in resp && Array.isArray((resp as any).results)) {
+            const paged = resp as any
+            equipmentSearchResults.value = paged.results || []
+            equipmentSearchTotal.value = typeof paged.count === 'number' ? paged.count : (paged.results?.length || 0)
+            equipmentSearchPage.value = page
+            // If backend doesn't expose page_size, use received length (but keep stable fallback)
+            equipmentSearchPageSize.value = paged.results?.length ? paged.results.length : equipmentSearchPageSize.value
+            return
+        }
+
+        if (Array.isArray(resp)) {
+            // Non-paginated backend response (fallback)
+            equipmentSearchResults.value = resp
+            equipmentSearchTotal.value = resp.length
+            equipmentSearchPage.value = 1
+            equipmentSearchPageSize.value = resp.length || equipmentSearchPageSize.value
+            return
+        }
+
+        equipmentSearchResults.value = []
+        equipmentSearchTotal.value = 0
+        equipmentSearchPage.value = 1
+    } catch (e) {
+        console.error('Equipment search failed:', e)
+        equipmentSearchResults.value = []
+        equipmentSearchTotal.value = 0
+        equipmentSearchPage.value = 1
+    } finally {
+        equipmentSearchLoading.value = false
+    }
+}
+
+const handleEquipmentSearchPageChange = (page: number) => {
+    fetchEquipmentSearch(page)
+}
+
 // Row Expenses State
 const showRowExpenseDialog = ref(false)
 const currentRowRow = ref<EquipmentRow | null>(null)
@@ -1316,12 +1380,9 @@ const loadData = async () => {
             deals.value = []
         }
 
-        const equipRes = await equipmentAPI.getEquipment()
-        if ('results' in equipRes && equipRes.results) {
-            equipmentList.value = equipRes.results
-        } else if (Array.isArray(equipRes)) {
-            equipmentList.value = equipRes
-        }
+        // IMPORTANT: не грузим весь список оборудования здесь.
+        // Для добавления используем server-side поиск, а для точечных операций — запрос по ID.
+        equipmentList.value = []
         
         const addPriceRes = await additionalPricesAPI.getAdditionalPrices()
         additionalPrices.value = addPriceRes
@@ -1489,11 +1550,7 @@ const getRate = (curr: string) => {
 }
 
 // --- Equipment Logic ---
-const filteredEquipment = computed(() => {
-    if (!equipmentSearchQuery.value) return equipmentList.value
-    const q = equipmentSearchQuery.value.toLowerCase()
-    return equipmentList.value.filter(e => e.equipment_name.toLowerCase().includes(q) || (e.equipment_articule && e.equipment_articule.toLowerCase().includes(q)))
-})
+// Поиск оборудования переведён на server-side: fetchEquipmentSearch()
 
 // Флаг для предотвращения двойного вызова
 let isSelectingEquipment = false
@@ -1970,26 +2027,10 @@ const handleEdit = async (row: CommercialProposal) => {
                     }
                 })
                 
-                // Post-process to add equipment details (prices) from global equipment list
-                selectedEquipment.value.forEach(row => {
-                   const eq = equipmentList.value.find(e => e.equipment_id === row.equipment_id)
-                   if (eq) {
-                       // Обновляем только базовые поля оборудования
-                       row.equipment_manufacture_price = parseFloat(eq.equipment_manufacture_price as unknown as string) || 0
-                       row.equipment_price_currency_type = eq.equipment_price_currency_type || 'KZT'
-                       row.production_price = parseFloat(eq.equipment_manufacture_price as unknown as string) || 0
-                       row.currency = eq.equipment_price_currency_type || 'KZT'
-                       
-                       // Set purchase price currency and original price
-                       row.purchase_price_currency = eq.equipment_price_currency_type || 'KZT'
-                       row.purchase_price_original = parseFloat(eq.equipment_manufacture_price as unknown as string) || 0
-                       
-                       // Use saved price_per_unit if available, otherwise use equipment sale_price_kzt
-                       if (row.sale_price_kzt === undefined && eq.sale_price_kzt) {
-                           row.sale_price_kzt = parseFloat(eq.sale_price_kzt as unknown as string)
-                       }
-                   }
-                })
+                // Раньше здесь подтягивали поля из предварительно загруженного equipmentList.
+                // Теперь список оборудования не грузим целиком (может быть большим),
+                // а актуальные данные по выбранным позициям подтягиваются точечно
+                // при открытии вкладки "Оборудование" через refreshEquipmentPricesSilently().
             }
             
             // Populate Global Expenses
@@ -2314,6 +2355,28 @@ onMounted(async () => {
             }
         }
     }
+})
+
+// Equipment search: load first page when dialog opens
+watch(showAddEquipmentDialog, (isOpen) => {
+    if (isOpen) {
+        equipmentSearchPage.value = 1
+        fetchEquipmentSearch(1)
+    } else {
+        equipmentSearchQuery.value = ''
+        equipmentSearchResults.value = []
+        equipmentSearchTotal.value = 0
+        equipmentSearchPage.value = 1
+    }
+})
+
+// Equipment search: debounce input (server-side)
+watch(equipmentSearchQuery, () => {
+    if (!showAddEquipmentDialog.value) return
+    if (equipmentSearchTimeout) clearTimeout(equipmentSearchTimeout)
+    equipmentSearchTimeout = setTimeout(() => {
+        fetchEquipmentSearch(1)
+    }, 300)
 })
 </script>
 
