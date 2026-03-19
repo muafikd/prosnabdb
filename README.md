@@ -126,6 +126,7 @@ pip install -r requirements.txt
 SECRET_KEY=your-secret-key-here
 DEBUG=True
 ALLOWED_HOSTS=localhost,127.0.0.1
+SERVICE_URL_FRONTEND=https://kp.mevent.kz
 DATABASE_NAME=prosnabdb
 DATABASE_USER=postgres
 DATABASE_PASSWORD=your-password

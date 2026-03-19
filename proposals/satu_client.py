@@ -14,6 +14,79 @@ import xml.etree.ElementTree as ET
 from xml.sax.saxutils import escape
 from datetime import datetime
 import io
+from django.conf import settings
+from typing import Optional
+
+
+def _to_absolute_public_url(url: str) -> Optional[str]:
+    """
+    Convert local (/media/...) or relative URLs to absolute public URLs,
+    so external services (Satu.kz) can fetch images.
+    """
+    if not url:
+        return None
+    u = str(url).strip()
+    if not u:
+        return None
+    if u.startswith('http://') or u.startswith('https://'):
+        return u
+    if u.startswith('//'):
+        # Protocol-relative -> force https
+        return 'https:' + u
+    if u.startswith('/'):
+        base = getattr(settings, 'SERVICE_URL_FRONTEND', '').rstrip('/')
+        if not base:
+            return None
+        return base + u
+    return None
+
+
+def _collect_equipment_image_urls(equip) -> list[str]:
+    """
+    Collect image URLs from both local photos and legacy JSONField.
+    Supports:
+    - EquipmentPhoto.image.url -> "/media/photos/..."
+    - equipment_imagelinks entries as:
+      - "https://..."
+      - {"url": "..."} (optionally with name)
+    """
+    urls: list[str] = []
+
+    # Local photos (preferred)
+    try:
+        for p in getattr(equip, 'photos', []).all():
+            abs_u = _to_absolute_public_url(getattr(p.image, 'url', None))
+            if abs_u:
+                urls.append(abs_u)
+    except Exception:
+        pass
+
+    raw = getattr(equip, 'equipment_imagelinks', None)
+    if isinstance(raw, list):
+        for item in raw:
+            u = None
+            if isinstance(item, str):
+                u = item
+            elif isinstance(item, dict):
+                u = item.get('url') or item.get('link')
+            abs_u = _to_absolute_public_url(u) if u else None
+            if abs_u:
+                urls.append(abs_u)
+    elif isinstance(raw, str):
+        for part in (x.strip() for x in raw.split(',') if x and x.strip()):
+            abs_u = _to_absolute_public_url(part)
+            if abs_u:
+                urls.append(abs_u)
+
+    # Deduplicate while preserving order
+    seen = set()
+    out: list[str] = []
+    for u in urls:
+        if u in seen:
+            continue
+        seen.add(u)
+        out.append(u)
+    return out
 
 def check_connection(token=None):
     """
@@ -59,9 +132,7 @@ def _generate_satu_xml(equipments):
         price = float(equip.sale_price_kzt) if equip.sale_price_kzt else 1.0
         available = "true" if equip.is_published else "false"
         
-        images = []
-        if equip.equipment_imagelinks and isinstance(equip.equipment_imagelinks, list):
-            images = [img for img in equip.equipment_imagelinks if isinstance(img, str) and img.startswith('http')]
+        images = _collect_equipment_image_urls(equip)
             
         name = escape(equip.equipment_name or "")
         vendor_code = escape(equip.equipment_articule or "")

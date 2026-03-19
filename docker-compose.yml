@@ -27,6 +27,7 @@ services:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
       - ALLOWED_HOSTS=*
+      - SERVICE_URL_FRONTEND=${SERVICE_URL_FRONTEND:-http://localhost:3006}
       - DEBUG=1
       - PYTHONUNBUFFERED=1
     networks:
@@ -50,6 +51,7 @@ services:
       - DATABASE_PASSWORD=${DATABASE_PASSWORD}
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - SERVICE_URL_FRONTEND=${SERVICE_URL_FRONTEND:-http://localhost:3006}
       - PYTHONUNBUFFERED=1
     networks:
       - default
@@ -72,6 +74,7 @@ services:
       - DATABASE_PASSWORD=${DATABASE_PASSWORD}
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - SERVICE_URL_FRONTEND=${SERVICE_URL_FRONTEND:-http://localhost:3006}
       - PYTHONUNBUFFERED=1
     networks:
       - default

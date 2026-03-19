@@ -135,6 +135,12 @@ STATIC_URL = 'static/'
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 
+# Frontend public URL used for absolute links in integrations/exports (e.g., Satu.kz images).
+# Must be reachable from the internet and include scheme.
+# Existing production env variable:
+#   SERVICE_URL_FRONTEND=https://kp.mevent.kz
+SERVICE_URL_FRONTEND = config('SERVICE_URL_FRONTEND', default='https://kp.mevent.kz').rstrip('/')
+
 # drf-spectacular settings for Swagger/OpenAPI documentation
 SPECTACULAR_SETTINGS = {
     'TITLE': 'Commercial Proposal Automation System API',

@@ -44,6 +44,10 @@
   ```text
   ALLOWED_HOSTS=localhost,kp.mevent.kz
   ```
+- **SERVICE_URL_FRONTEND** — публичный URL фронтенда (используется для абсолютных ссылок в интеграциях/экспортах, например фото для Satu.kz):
+  ```text
+  SERVICE_URL_FRONTEND=https://kp.mevent.kz
+  ```
 - Остальные переменные (БД, SECRET_KEY и т.д.) — как уже настроено.
 
 ---
