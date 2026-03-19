@@ -1519,6 +1519,7 @@ class ExportService:
     def generate_pdf_html(self):
         """Builds HTML for PDF generation using layout_data and data_pkg."""
         from django.template.loader import render_to_string
+        from django.utils.html import escape
         
         logo_url_or_path = self.data_pkg.get('company_logo_url')
         
@@ -1576,6 +1577,7 @@ class ExportService:
             content = block.get('content', '')
             spacing = block.get('spacing', 15)
             col_widths = block.get('columnWidths', {})
+            had_placeholder = False
             
             # Don't show title for total_price_table placeholder
             if '{total_price_table}' in content:
@@ -1585,25 +1587,40 @@ class ExportService:
             if '{equipment_list}' in content:
                 content = content.replace('{equipment_list}', self._get_equipment_table_html(col_widths))
                 placeholders_found['equipment_list'] = True
+                had_placeholder = True
             if '{total_price_table}' in content:
                 content = content.replace('{total_price_table}', self._get_total_price_html())
                 placeholders_found['total_price'] = True
+                had_placeholder = True
             if '{additional_services_table}' in content:
                 content = content.replace('{additional_services_table}', self._get_additional_services_html(col_widths))
+                had_placeholder = True
             if '{equipment_specs}' in content:
                 content = content.replace('{equipment_specs}', self._get_equipment_specs_html(col_widths))
+                had_placeholder = True
             # Support legacy placeholder name
             if '{equipment_specification}' in content:
                 content = content.replace('{equipment_specification}', self._get_equipment_specs_html(col_widths))
+                had_placeholder = True
             if '{equipment_details}' in content:
                 content = content.replace('{equipment_details}', self._get_equipment_details_html(col_widths))
+                had_placeholder = True
             # Support optional plural form
             if '{equipment_detail}' in content:
                 content = content.replace('{equipment_detail}', self._get_equipment_details_html(col_widths))
+                had_placeholder = True
             if '{equipment_tech_process}' in content:
                 content = content.replace('{equipment_tech_process}', self._get_equipment_tech_process_html(col_widths))
+                had_placeholder = True
             if '{equipment_photo_grid}' in content:
                 content = content.replace('{equipment_photo_grid}', self._get_photo_grid_html())
+                had_placeholder = True
+
+            # Preserve user-entered line breaks for plain text sections in PDF.
+            # Placeholder blocks already return full HTML and must stay untouched.
+            if not had_placeholder:
+                normalized = str(content).replace('\r\n', '\n').replace('\r', '\n')
+                content = escape(normalized).replace('\n', '<br/>')
 
             blocks_html.append({
                 'title': title,

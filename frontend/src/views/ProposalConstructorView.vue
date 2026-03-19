@@ -9,10 +9,6 @@
               <el-icon><Plus /></el-icon>
               Создать верстку
             </el-button>
-            <el-button @click="openSectionLibrary">
-              <el-icon><List /></el-icon>
-              Библиотека разделов
-            </el-button>
           </div>
         </template>
 
@@ -137,6 +133,10 @@
                <span v-if="saving" class="saving-indicator">Сохранение...</span>
              </div>
              <div class="header-right-group">
+               <el-button @click="openSectionLibrary" style="margin-right: 10px;">
+                 <el-icon><List /></el-icon>
+                 Библиотека разделов
+               </el-button>
                <el-dropdown @command="handleExport">
                  <el-button>Скачать <el-icon class="el-icon--right"><ArrowDown /></el-icon></el-button>
                  <template #dropdown>
@@ -260,12 +260,18 @@
 
                   <!-- Empty State / Add Block -->
                   <div class="add-section-area">
-                      <el-button type="primary" plain style="width: 100%" @click="addBlock">
-                         <el-icon><Plus /></el-icon> Добавить раздел
-                      </el-button>
-                      <el-button plain style="width: 100%; margin: 10px 0 0 0;" @click="openSelectTemplateModal">
-                         <el-icon><List /></el-icon> Добавить из библиотеки
-                      </el-button>
+                      <el-dropdown @command="handleAddSectionCommand" style="width: 100%;">
+                        <el-button type="primary" plain style="width: 100%">
+                           <el-icon><Plus /></el-icon> Добавить раздел
+                           <el-icon class="el-icon--right"><ArrowDown /></el-icon>
+                        </el-button>
+                        <template #dropdown>
+                          <el-dropdown-menu>
+                            <el-dropdown-item command="empty">Пустой раздел</el-dropdown-item>
+                            <el-dropdown-item command="template">Из библиотеки шаблонов</el-dropdown-item>
+                          </el-dropdown-menu>
+                        </template>
+                      </el-dropdown>
                   </div>
               </div>
           </div>
@@ -290,8 +296,11 @@
          <el-table-column prop="title" label="Заголовок" width="200" />
          <el-table-column prop="name" label="Тех. название" width="200" />
          <el-table-column prop="text" label="Контент" show-overflow-tooltip />
-         <el-table-column label="Действия" width="100" align="center">
+         <el-table-column label="Действия" width="140" align="center">
             <template #default="scope">
+               <el-button size="small" type="primary" circle @click="openEditTemplateModal(scope.row)">
+                  <el-icon><Edit /></el-icon>
+               </el-button>
                <el-button size="small" type="danger" circle @click="deleteSectionTemplate(scope.row.id)">
                   <el-icon><Delete /></el-icon>
                </el-button>
@@ -303,7 +312,7 @@
     <!-- Create/Edit Section Template Modal -->
     <el-dialog
       v-model="templateModalVisible"
-      title="Создание шаблона раздела"
+      :title="editingTemplateId ? 'Редактирование шаблона раздела' : 'Создание шаблона раздела'"
       width="600px"
       align-center
     >
@@ -394,6 +403,7 @@ const sectionTemplates = ref<any[]>([])
 const templateModalVisible = ref(false)
 const savingTemplate = ref(false)
 const newTemplate = ref({ name: '', title: '', text: '' })
+const editingTemplateId = ref<number | null>(null)
 const logoInput = ref<HTMLInputElement | null>(null)
 
 // Insert Template State
@@ -595,7 +605,18 @@ const deleteSectionTemplate = async (id: number) => {
 }
 
 const openCreateTemplateModal = () => {
+    editingTemplateId.value = null
     newTemplate.value = { name: '', title: '', text: '' }
+    templateModalVisible.value = true
+}
+
+const openEditTemplateModal = (template: any) => {
+    editingTemplateId.value = template.id
+    newTemplate.value = {
+        name: template.name || '',
+        title: template.title || '',
+        text: template.text || ''
+    }
     templateModalVisible.value = true
 }
 
@@ -607,15 +628,23 @@ const saveSectionTemplate = async () => {
     savingTemplate.value = true
     const token = Cookies.get('access_token')
     try {
-        await axios.post('/api/section-templates/', newTemplate.value, {
-            headers: { Authorization: `Bearer ${token}` }
-        })
-        ElMessage.success('Шаблон создан')
+        if (editingTemplateId.value) {
+            await axios.patch(`/api/section-templates/${editingTemplateId.value}/`, newTemplate.value, {
+                headers: { Authorization: `Bearer ${token}` }
+            })
+            ElMessage.success('Шаблон обновлен')
+        } else {
+            await axios.post('/api/section-templates/', newTemplate.value, {
+                headers: { Authorization: `Bearer ${token}` }
+            })
+            ElMessage.success('Шаблон создан')
+        }
         templateModalVisible.value = false
+        editingTemplateId.value = null
         fetchSectionTemplates()
     } catch (e) {
         console.error(e)
-        ElMessage.error('Ошибка создания шаблона')
+        ElMessage.error(editingTemplateId.value ? 'Ошибка обновления шаблона' : 'Ошибка создания шаблона')
     } finally {
         savingTemplate.value = false
     }
@@ -699,6 +728,14 @@ const clearSelection = () => {
 const addBlock = () => {
    templateBlocks.value.push({ title: 'Новый раздел', content: 'Текст...', spacing: 15 })
    debouncedSave()
+}
+
+const handleAddSectionCommand = (command: string) => {
+    if (command === 'template') {
+        openSelectTemplateModal()
+        return
+    }
+    addBlock()
 }
 
 const removeBlock = (index: number) => {
