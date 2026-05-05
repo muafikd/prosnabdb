@@ -113,17 +113,18 @@ onUnmounted(() => {
   width: 100%;
   border-collapse: collapse;
   margin-bottom: 20px;
-  font-family: Arial, sans-serif;
-  font-size: 10pt;
+  font-family: 'Times New Roman', Times, serif;
+  font-size: 13.3px; /* 10pt */
 }
 
 .proposal-table th, .proposal-table td {
-  border: 1px solid #ddd;
-  padding: 8px;
+  border: 1px solid #333;
+  padding: 4px;
   vertical-align: top;
   position: relative;
   overflow: hidden;
   text-overflow: ellipsis;
+  font-size: 10pt;
 }
 
 .proposal-table th {
@@ -156,15 +157,11 @@ onUnmounted(() => {
 .whitespace-nowrap { white-space: nowrap; }
 
 .item-name { font-weight: bold; }
-.item-desc { font-size: 0.9em; color: #000; margin-top: 4px; }
-.item-article { font-size: 0.8em; color: #000; margin-top: 2px; }
+.item-desc { font-size: 9pt; color: #333; margin-top: 2px; }
+.item-article { font-size: 8pt; color: #666; margin-top: 1px; }
 
 .total-row {
   background-color: #f5f5f5;
-  border-top: 2px solid #333;
-}
-
-.total-row td {
-  border-top: 2px solid #333;
+  font-weight: bold;
 }
 </style>

@@ -16,6 +16,14 @@ from io import BytesIO
 from django.core.cache import cache
 from django.core.files.base import ContentFile
 import logging
+from django.utils.html import escape
+from docx import Document
+from docx.shared import Inches, Pt, Mm, RGBColor
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml.ns import nsdecls
+from docx.oxml import parse_xml
+from docxtpl import DocxTemplate, InlineImage
+from html.parser import HTMLParser
 
 try:
     from PIL import Image
@@ -23,6 +31,69 @@ except ImportError:
     Image = None
 
 logger = logging.getLogger(__name__)
+
+class DocxHTMLParser(HTMLParser):
+    def __init__(self, subdoc):
+        super().__init__()
+        self.subdoc = subdoc
+        self.current_paragraph = self.subdoc.add_paragraph()
+        self.current_paragraph.style.font.size = Pt(10)
+        
+        self.bold = False
+        self.italic = False
+        self.underline = False
+        
+    def handle_starttag(self, tag, attrs):
+        if tag in ('b', 'strong'):
+            self.bold = True
+        elif tag in ('i', 'em'):
+            self.italic = True
+        elif tag == 'u':
+            self.underline = True
+        elif tag in ('p', 'div'):
+            if len(self.current_paragraph.runs) > 0:
+                self.current_paragraph = self.subdoc.add_paragraph()
+                self.current_paragraph.style.font.size = Pt(10)
+        elif tag == 'br':
+            self.current_paragraph.add_run('\n')
+            
+    def handle_endtag(self, tag):
+        if tag in ('b', 'strong'):
+            self.bold = False
+        elif tag in ('i', 'em'):
+            self.italic = False
+        elif tag == 'u':
+            self.underline = False
+        elif tag in ('p', 'div'):
+            self.current_paragraph = self.subdoc.add_paragraph()
+            self.current_paragraph.style.font.size = Pt(10)
+            
+    def handle_data(self, data):
+        if data:
+            run = self.current_paragraph.add_run(data)
+            run.font.size = Pt(10)
+            if self.bold: run.font.bold = True
+            if self.italic: run.font.italic = True
+            if self.underline: run.underline = True
+
+class LinkConverterService:
+    """Service for converting cloud storage links to direct download links."""
+    
+    @staticmethod
+    def get_direct_link(url):
+        """
+        Convert cloud storage link to direct download link.
+        Supported services: Google Drive, Yandex Disk.
+        """
+        if not url:
+            return url
+            
+        if 'drive.google.com' in url:
+            return LinkConverterService._convert_google_drive(url)
+        elif 'disk.yandex' in url or 'yadi.sk' in url:
+            return LinkConverterService._convert_yandex_disk(url)
+            
+        return url
 
 
 class LinkConverterService:
@@ -1346,17 +1417,27 @@ class DataAggregatorService:
         return data
 
     def _get_equipment_specifications(self):
-        """Get equipment specifications for ALL equipment in proposal, even if empty."""
+        """Get equipment specifications for ALL equipment in proposal, even if empty. Includes Video Link if present."""
         data = {}
         for eq_list in self.proposal.equipment_lists.all():
             for item in eq_list.equipment_items_relation.select_related('equipment').prefetch_related('equipment__photos').all().order_by('order', 'created_at'):
                 equipment = item.equipment
                 specs = equipment.specifications.all()
                 # Always include equipment, even if no specs (empty list)
-                data[equipment.equipment_id] = [
+                specs_list = [
                     {'name': s.spec_parameter_name, 'value': s.spec_parameter_value} 
                     for s in specs
                 ]
+                
+                # Add Video Link as a specification row if present
+                if equipment.equipment_videolinks:
+                    specs_list.append({
+                        'name': f"Ссылка на видео: {equipment.equipment_videolinks}", 
+                        'value': '',
+                        'is_video_link': True
+                    })
+                    
+                data[equipment.equipment_id] = specs_list
         return data
 
     def _get_tech_processes(self):
@@ -1425,12 +1506,6 @@ class DataAggregatorService:
                     result.append({'name': '', 'url': direct_url})
         elif isinstance(imagelinks, str):
             links = [link.strip() for link in imagelinks.split(',') if link.strip()]
-            for link in links:
-                direct_url = LinkConverterService.get_direct_link(link)
-                result.append({'name': '', 'url': direct_url})
-        return result
-
-
 class ExportService:
     """
     Service for generating export files (PDF, DOCX) from ProposalTemplate.
@@ -1445,58 +1520,37 @@ class ExportService:
         
         # Use saved data_package from proposal if available (preserves constructor order and changes)
         if self.proposal.data_package:
-            self.data_pkg = self.proposal.data_package.copy()  # Make a copy to avoid modifying original
+            self.data_pkg = self.proposal.data_package.copy()
             saved_equipment_list = self.data_pkg.get('equipment_list', [])
             fresh_equipment_list = fresh_data_pkg.get('equipment_list', [])
-            
-            # Create a map of fresh data by equipment_id for price updates
             fresh_map = {item['equipment_id']: item for item in fresh_equipment_list}
             
-            # Use saved list order but update prices from fresh calculation
             if saved_equipment_list:
                 merged_list = []
                 for saved_item in saved_equipment_list:
                     eq_id = saved_item.get('equipment_id')
                     if eq_id in fresh_map:
-                        # Update prices from fresh calculation but keep saved order and other fields
                         merged_item = saved_item.copy()
                         merged_item['price_per_unit'] = fresh_map[eq_id]['price_per_unit']
                         merged_item['total_price'] = fresh_map[eq_id]['total_price']
-                        # Also update quantity if it changed
                         merged_item['quantity'] = fresh_map[eq_id]['quantity']
-                        # Update calculated data from fresh calculation
                         if 'base_cost_kzt' in fresh_map[eq_id]:
                             merged_item['base_cost_kzt'] = fresh_map[eq_id]['base_cost_kzt']
-                        if 'allocated_overhead_per_unit' in fresh_map[eq_id]:
-                            merged_item['allocated_overhead_per_unit'] = fresh_map[eq_id]['allocated_overhead_per_unit']
-                        if 'margin_kzt' in fresh_map[eq_id]:
-                            merged_item['margin_kzt'] = fresh_map[eq_id]['margin_kzt']
-                        if 'margin_percentage' in fresh_map[eq_id]:
-                            merged_item['margin_percentage'] = fresh_map[eq_id]['margin_percentage']
-                        if 'purchase_price_kzt' in fresh_map[eq_id]:
-                            merged_item['purchase_price_kzt'] = fresh_map[eq_id]['purchase_price_kzt']
-                        # Always refresh images from fresh data so new photos appear in exports
                         if 'images' in fresh_map[eq_id]:
                             merged_item['images'] = fresh_map[eq_id]['images']
-                        # Ensure unit field is present
                         if 'unit' not in merged_item or not merged_item.get('unit'):
                             merged_item['unit'] = fresh_map[eq_id].get('unit', 'шт')
                         merged_list.append(merged_item)
                     else:
-                        # If not in fresh, keep saved item as-is but ensure unit field
                         if 'unit' not in saved_item or not saved_item.get('unit'):
                             saved_item['unit'] = 'шт'
                         merged_list.append(saved_item)
-                
                 self.data_pkg['equipment_list'] = merged_list
             else:
-                # If no saved list, use fresh list
                 self.data_pkg['equipment_list'] = fresh_equipment_list
         else:
             self.data_pkg = fresh_data_pkg
         
-        # Ensure all required data is present, especially equipment_specifications
-        # If data_package exists but is missing some fields, regenerate them
         if not self.data_pkg.get('equipment_specifications'):
             self.data_pkg['equipment_specifications'] = aggregator._get_equipment_specifications()
         if not self.data_pkg.get('equipment_details'):
@@ -1504,26 +1558,29 @@ class ExportService:
         if not self.data_pkg.get('tech_processes'):
             self.data_pkg['tech_processes'] = aggregator._get_tech_processes()
         
-        # Always update proposal metadata to ensure date is in correct format (d.m.Y)
-        # This fixes issues with old data_packages that have dates in ISO format
         self.data_pkg['proposal'] = aggregator._get_proposal_metadata()
         
-        # Double-check: Ensure equipment_list items have 'unit' field
         for item in self.data_pkg.get('equipment_list', []):
             if 'unit' not in item or not item.get('unit'):
                 item['unit'] = 'шт'
         
         self.header_data = template.header_data or {}
         self.layout_data = template.layout_data or []
+        
+        # Fallback for header info from SystemSettings if template has none
+        if not self.header_data.get('kz_info') or not self.header_data.get('ru_info'):
+            from .models import SystemSettings
+            sys_settings = SystemSettings.get_settings()
+            if not self.header_data.get('kz_info'):
+                self.header_data['kz_info'] = sys_settings.header_kz_info
+            if not self.header_data.get('ru_info'):
+                self.header_data['ru_info'] = sys_settings.header_ru_info
 
     def generate_pdf_html(self):
         """Builds HTML for PDF generation using layout_data and data_pkg."""
         from django.template.loader import render_to_string
-        from django.utils.html import escape
         
         logo_url_or_path = self.data_pkg.get('company_logo_url')
-        
-        # Resolve to a real local path for WeasyPrint
         final_logo_path = ""
         if logo_url_or_path:
             if logo_url_or_path.startswith('/media/'):
@@ -1533,45 +1590,14 @@ class ExportService:
                 static_rel = logo_url_or_path[len(settings.STATIC_URL):] if logo_url_or_path.startswith(settings.STATIC_URL) else logo_url_or_path[8:]
                 final_logo_path = os.path.join(settings.BASE_DIR, 'static', static_rel)
             else:
-                # Fallback or absolute path
                 final_logo_path = logo_url_or_path
 
         if not final_logo_path or not os.path.exists(final_logo_path):
              final_logo_path = os.path.join(settings.BASE_DIR, 'static/assets/prosnab_logo.png')
         
-        # Ensure we use file:// for WeasyPrint
         logo_url = 'file://' + final_logo_path
 
-        # Ensure header_data has defaults if empty
-        if not self.header_data.get('kz_info'):
-            self.header_data['kz_info'] = """
-                <p><b>ЖШС «PROSNABservice»</b></p>
-                <p>Мекен жай: 050065, Алматы қ.,</p>
-                <p>Төле би көшесі 286/4, 403 каб.</p>
-                <p>БИН 170940001112</p>
-                <p>ИИК KZ796017131000018253</p>
-                <p>АҚ «Қазақстан халық банкі»</p>
-                <p>БИК «HSBKKZKX»</p>
-                <p>e-mail: prosnabservice@mail.ru</p>
-            """
-        if not self.header_data.get('ru_info'):
-            self.header_data['ru_info'] = """
-                <p><b>ТОО «PROSNAB service»</b></p>
-                <p>Адрес: 050065, г. Алматы,</p>
-                <p>ул. Толе би 286/4, 403 каб.</p>
-                <p>БИН 170940001112</p>
-                <p>ИИК KZ796017131000018253</p>
-                <p>АО «Народный банк Казахстана»</p>
-                <p>БИК «HSBKKZKX»</p>
-                <p>e-mail: prosnabservice@mail.ru</p>
-            """
-        # Build blocks HTML
         blocks_html = []
-        placeholders_found = {
-            'total_price': False,
-            'equipment_list': False,
-        }
-        
         for block in self.layout_data:
             title = block.get('title', '')
             content = block.get('content', '')
@@ -1579,35 +1605,24 @@ class ExportService:
             col_widths = block.get('columnWidths', {})
             had_placeholder = False
             
-            # Don't show title for total_price_table placeholder
-            if '{total_price_table}' in content:
-                title = ''
+            if '{total_price_table}' in content: title = ''
             
-            # Replace placeholders and track them
             if '{equipment_list}' in content:
                 content = content.replace('{equipment_list}', self._get_equipment_table_html(col_widths))
-                placeholders_found['equipment_list'] = True
                 had_placeholder = True
             if '{total_price_table}' in content:
                 content = content.replace('{total_price_table}', self._get_total_price_html())
-                placeholders_found['total_price'] = True
                 had_placeholder = True
             if '{additional_services_table}' in content:
                 content = content.replace('{additional_services_table}', self._get_additional_services_html(col_widths))
                 had_placeholder = True
-            if '{equipment_specs}' in content:
-                content = content.replace('{equipment_specs}', self._get_equipment_specs_html(col_widths))
+            if '{equipment_specs}' in content or '{equipment_specification}' in content:
+                placeholder = '{equipment_specs}' if '{equipment_specs}' in content else '{equipment_specification}'
+                content = content.replace(placeholder, self._get_equipment_specs_html(col_widths))
                 had_placeholder = True
-            # Support legacy placeholder name
-            if '{equipment_specification}' in content:
-                content = content.replace('{equipment_specification}', self._get_equipment_specs_html(col_widths))
-                had_placeholder = True
-            if '{equipment_details}' in content:
-                content = content.replace('{equipment_details}', self._get_equipment_details_html(col_widths))
-                had_placeholder = True
-            # Support optional plural form
-            if '{equipment_detail}' in content:
-                content = content.replace('{equipment_detail}', self._get_equipment_details_html(col_widths))
+            if '{equipment_details}' in content or '{equipment_detail}' in content:
+                placeholder = '{equipment_details}' if '{equipment_details}' in content else '{equipment_detail}'
+                content = content.replace(placeholder, self._get_equipment_details_html(col_widths))
                 had_placeholder = True
             if '{equipment_tech_process}' in content:
                 content = content.replace('{equipment_tech_process}', self._get_equipment_tech_process_html(col_widths))
@@ -1616,196 +1631,103 @@ class ExportService:
                 content = content.replace('{equipment_photo_grid}', self._get_photo_grid_html())
                 had_placeholder = True
 
-            # Preserve user-entered line breaks for plain text sections in PDF.
-            # Placeholder blocks already return full HTML and must stay untouched.
             if not had_placeholder:
                 normalized = str(content).replace('\r\n', '\n').replace('\r', '\n')
-                content = escape(normalized).replace('\n', '<br/>')
+                content = normalized.replace('\n', '<br/>')
 
-            blocks_html.append({
-                'title': title,
-                'content': content,
-                'spacing': spacing
-            })
-
-        # Ensure critical info is present
-        if not placeholders_found['equipment_list']:
-            blocks_html.append({
-                'title': 'Спецификация оборудования',
-                'content': self._get_equipment_table_html({}),
-                'spacing': 15
-            })
-        if not placeholders_found['total_price']:
-            blocks_html.append({
-                'title': '',
-                'content': self._get_total_price_html(),
-                'spacing': 15
-            })
+            blocks_html.append({'title': title, 'content': content, 'spacing': spacing})
 
         context = {
-            'proposal': self.data_pkg.get('proposal'),
-            'client': self.data_pkg.get('client'),
-            'user': self.data_pkg.get('user'),
-            'logo_url': logo_url,
+            'proposal': self.data_pkg.get('proposal', {}),
+            'client': self.data_pkg.get('client', {}),
+            'user': self.data_pkg.get('user', {}),
             'header_data': self.header_data,
+            'logo_url': logo_url,
             'blocks': blocks_html,
         }
-        
         return render_to_string('proposals/pdf_template_new.html', context)
 
     def _get_equipment_table_html(self, col_widths):
         items = self.data_pkg.get('equipment_list', [])
         currency = self.proposal.currency_ticket
-        
-        # Ensure items have 'unit' field - double check
-        for item in items:
-            if 'unit' not in item or not item.get('unit'):
-                # Try to get from fresh data
-                aggregator = DataAggregatorService(self.proposal)
-                fresh_list = aggregator._calculate_and_build_equipment_list()
-                fresh_map = {eq_item['equipment_id']: eq_item for eq_item in fresh_list}
-                eq_id = item.get('equipment_id')
-                if eq_id in fresh_map:
-                    item['unit'] = fresh_map[eq_id].get('unit', 'шт')
-                else:
-                    item['unit'] = 'шт'
-        
-        # We assume col_widths.name exists if resized, otherwise default
         name_width = col_widths.get('name', 300)
-        
-        # Escape HTML in text content to prevent issues
-        from django.utils.html import escape
         
         rows = []
         total_sum = Decimal('0')
         for i, item in enumerate(items, 1):
-            name = escape(str(item.get('name', '')))
-            description = escape(str(item.get('description', ''))) if item.get('description') else ''
-            article = escape(str(item.get('article', ''))) if item.get('article') else ''
-            quantity = item.get('quantity', 0)
-            unit = escape(str(item.get('unit', 'шт')))
-            price_per_unit = float(item.get('price_per_unit', 0))
-            total_price = Decimal(str(item.get('total_price', 0)))
-            total_sum += total_price
+            price = Decimal(str(item.get('price_per_unit', 0)))
+            qty = Decimal(str(item.get('quantity', 0)))
+            row_total = price * qty
+            total_sum += row_total
             
-            # Build name cell content - use simple structure for WeasyPrint
-            name_cell = f'<strong>{name}</strong>'
-            if description:
-                name_cell += f'<br/><span style="font-size: 8pt; color: #333;">{description}</span>'
-            if article:
-                name_cell += f'<br/><span style="font-size: 8pt; color: #666;">Арт: {article}</span>'
-            
-            rows.append(f"""<tr>
-<td style="text-align: center; padding: 4px; border: 1px solid #333;">{i}</td>
-<td style="width: {name_width}px; padding: 4px; border: 1px solid #333; text-align: left;">{name_cell}</td>
-<td style="text-align: center; padding: 4px; border: 1px solid #333;">{quantity}</td>
-<td style="text-align: center; padding: 4px; border: 1px solid #333;">{unit}</td>
-<td style="text-align: right; white-space: nowrap; padding: 4px; border: 1px solid #333;">{price_per_unit:,.2f} {currency}</td>
-<td style="text-align: right; white-space: nowrap; padding: 4px; border: 1px solid #333;">{float(total_price):,.2f} {currency}</td>
-</tr>""")
+            rows.append(f"""
+            <tr>
+                <td style="text-align: center; border: 1px solid #333; padding: 4px; font-size: 10pt;">{i}</td>
+                <td style="border: 1px solid #333; padding: 4px; font-size: 10pt;">
+                    <div class="item-name"><b>{escape(str(item.get('name', '')))}</b></div>
+                    <div style="font-size: 9pt; color: #333;">{escape(str(item.get('description', '')))}</div>
+                    {f'<div style="font-size: 9pt; color: #666;">Арт: {escape(str(item.get("article")))}</div>' if item.get('article') else ''}
+                </td>
+                <td style="text-align: center; border: 1px solid #333; padding: 4px; font-size: 10pt;">{qty}</td>
+                <td style="text-align: center; border: 1px solid #333; padding: 4px; font-size: 10pt;">{escape(str(item.get('unit', 'шт')))}</td>
+                <td style="text-align: right; border: 1px solid #333; padding: 4px; font-size: 10pt;">{price:,.2f} {currency}</td>
+                <td style="text-align: right; border: 1px solid #333; padding: 4px; font-size: 10pt;">{row_total:,.2f} {currency}</td>
+            </tr>
+            """)
         
-        rows_html = ''.join(rows)
+        total_row = f"""<tr style="background-color: #f5f5f5; font-weight: bold;">
+            <td colspan="5" style="text-align: right; padding: 6px; border: 1px solid #333;">Итого:</td>
+            <td style="text-align: right; padding: 6px; border: 1px solid #333;">{total_sum:,.2f} {currency}</td>
+        </tr>"""
         
-        # Add total row - colspan=5 to merge first 5 columns (№, Наименование, Кол-во, Ед., Цена за ед.)
-        # Use explicit colspan attribute for WeasyPrint compatibility
-        total_sum_float = float(total_sum)
-        total_row = f"""<tr style="background-color: #f5f5f5; border-top: 2px solid #333;">
-<td colspan="5" style="text-align: right; font-weight: bold; padding: 6px; border: 1px solid #333; border-top: 2px solid #333;">Итого:</td>
-<td style="text-align: right; white-space: nowrap; font-weight: bold; padding: 6px; border: 1px solid #333; border-top: 2px solid #333;">{total_sum_float:,.2f} {currency}</td>
-</tr>"""
-        
-        # Build complete table HTML - ensure all 6 columns are present
-        html_table = f"""<table class="equipment-table" style="width: 100%; border-collapse: collapse; margin-bottom: 10px; border: 1px solid #333;">
-<thead>
-<tr style="background-color: #f2f2f2;">
-<th style="width: 30px; border: 1px solid #333; padding: 4px; text-align: center;">№</th>
-<th style="width: {name_width}px; border: 1px solid #333; padding: 4px; text-align: left;">Наименование</th>
-<th style="width: 60px; border: 1px solid #333; padding: 4px; text-align: center;">Кол-во</th>
-<th style="width: 60px; border: 1px solid #333; padding: 4px; text-align: center;">Ед.</th>
-<th style="width: 100px; border: 1px solid #333; padding: 4px; text-align: right;">Цена за ед.</th>
-<th style="width: 100px; border: 1px solid #333; padding: 4px; text-align: right;">Сумма</th>
-</tr>
-</thead>
-<tbody>
-{rows_html}
-{total_row}
-</tbody>
-</table>"""
-        
-        return html_table
+        return f"""<table style="width: 100%; border-collapse: collapse; border: 1px solid #333;">
+            <thead><tr style="background-color: #f2f2f2;">
+                <th style="border: 1px solid #333; padding: 4px; font-size: 10pt;">№</th>
+                <th style="width: {name_width}px; border: 1px solid #333; padding: 4px; font-size: 10pt;">Наименование</th>
+                <th style="border: 1px solid #333; padding: 4px; font-size: 10pt;">Кол-во</th>
+                <th style="border: 1px solid #333; padding: 4px; font-size: 10pt;">Ед.</th>
+                <th style="border: 1px solid #333; padding: 4px; font-size: 10pt;">Цена</th>
+                <th style="border: 1px solid #333; padding: 4px; font-size: 10pt;">Сумма</th>
+            </tr></thead><tbody>{''.join(rows)}{total_row}</tbody></table>"""
+
+    def _get_total_price_html(self):
+        p = self.data_pkg.get('proposal', {})
+        total = float(p.get("total_price", 0))
+        currency = p.get("currency", "")
+        return f'<div style="text-align: right; font-weight: bold; font-size: 10pt; margin-top: 10px;">ИТОГО: {total:,.2f} {currency}</div>'
 
     def _get_additional_services_html(self, col_widths):
         services = self.data_pkg.get('additional_services', [])
         if not services: return ""
         currency = self.proposal.currency_ticket
         desc_width = col_widths.get('description', 400)
-        
         rows = ""
         for s in services:
-            # В форме: name = "Название", description = "Описание". Показываем как в конструкторе: description || name
             title = s.get('description') or s.get('name', '') or ''
-            rows += f"""
-            <tr>
-                <td style="width: {desc_width}px; border: 1px solid #333; padding: 2px;">{title}</td>
-                <td style="text-align: right; border: 1px solid #333; padding: 2px;">{float(s.get('price', 0)):,.2f} {currency}</td>
-            </tr>
-            """
-        return f"""
-        <table class="services-table" style="width: 100%; border-collapse: collapse;">
-            <thead><tr style="background-color: #f2f2f2;"><th style="width: {desc_width}px; border: 1px solid #333; padding: 2px;">Описание</th><th style="border: 1px solid #333; padding: 2px;">Стоимость</th></tr></thead>
-            <tbody>{rows}</tbody>
-        </table>
-        """
+            rows += f'<tr><td style="width: {desc_width}px; border: 1px solid #333; padding: 4px; font-size: 10pt;">{title}</td><td style="text-align: right; border: 1px solid #333; padding: 4px; font-size: 10pt;">{float(s.get("price", 0)):,.2f} {currency}</td></tr>'
+        return f'<table style="width: 100%; border-collapse: collapse;"><thead><tr style="background-color: #f2f2f2;"><th style="border: 1px solid #333; padding: 4px; font-size: 10pt;">Описание</th><th style="border: 1px solid #333; padding: 4px; font-size: 10pt;">Стоимость</th></tr></thead><tbody>{rows}</tbody></table>'
 
     def _resolve_image_path_for_pdf(self, url):
-        """Convert image URL to path suitable for WeasyPrint (file:// for local, URL for http)."""
-        if not url:
-            return ''
-        img_path = url
+        if not url: return ''
         if url.startswith('/media/'):
             media_rel = url[len(settings.MEDIA_URL):] if url.startswith(settings.MEDIA_URL) else url[7:]
             local_path = os.path.join(settings.MEDIA_ROOT, media_rel)
-            if os.path.exists(local_path):
-                img_path = 'file://' + local_path
-        elif url.startswith('http'):
-            img_path = url
+            if os.path.exists(local_path): return 'file://' + local_path
         elif url.startswith('/static/'):
             static_rel = url[len(settings.STATIC_URL):] if url.startswith(settings.STATIC_URL) else url[8:]
             local_path = os.path.join(settings.BASE_DIR, 'static', static_rel)
-            if os.path.exists(local_path):
-                img_path = 'file://' + local_path
-        return img_path
+            if os.path.exists(local_path): return 'file://' + local_path
+        return url
 
     def _get_equipment_specs_html(self, col_widths):
-        """Equipment specs table: Параметр 35%, Значение 20%, Изображение 45%. Images in 3rd column, rowspan distributed by photo count. Image width 95%, height auto."""
         items = self.data_pkg.get('equipment_list', [])
         html = ""
         specs_dict = self.data_pkg.get('equipment_specifications', {})
-        
-        if not specs_dict or len(specs_dict) == 0:
-            from .services import DataAggregatorService
-            aggregator = DataAggregatorService(self.proposal)
-            specs_dict = aggregator._get_equipment_specifications()
-            self.data_pkg['equipment_specifications'] = specs_dict
-        
         for item in items:
             eq_id = item.get('equipment_id')
-            if not eq_id:
-                continue
-            
-            specs = None
-            if eq_id in specs_dict:
-                specs = specs_dict[eq_id]
-            elif str(eq_id) in specs_dict:
-                specs = specs_dict[str(eq_id)]
-            elif isinstance(eq_id, str) and int(eq_id) in specs_dict:
-                specs = specs_dict[int(eq_id)]
-            elif isinstance(eq_id, int) and str(eq_id) in specs_dict:
-                specs = specs_dict[str(eq_id)]
-            
-            if not specs or len(specs) == 0:
-                continue
-            
+            if not eq_id: continue
+            specs = specs_dict.get(eq_id) or specs_dict.get(str(eq_id))
+            if not specs: continue
             images = item.get('images', []) or []
             total_rows = len(specs)
             num_photos = len(images)
@@ -1813,24 +1735,19 @@ class ExportService:
             remainder = total_rows % num_photos if num_photos else 0
             
             def image_cell_at_row(row_index):
-                if num_photos == 0:
-                    return (total_rows, None) if row_index == 0 else (None, None)
+                if num_photos == 0: return (total_rows, None) if row_index == 0 else (None, None)
                 start = 0
                 for i in range(num_photos):
                     r = base_rowspan + (1 if i < remainder else 0)
-                    if row_index == start:
-                        return (r, images[i] if i < len(images) else None)
+                    if row_index == start: return (r, images[i])
                     start += r
                 return (None, None)
             
-            html += '<div class="specs-section" style="margin-bottom: 15px;">'
-            html += f'<h3 style="font-size: 9pt; margin-bottom: 3px;">{item["name"]}</h3>'
-            html += '<table style="width: 100%; border-collapse: collapse; table-layout: fixed;">'
-            html += '<thead><tr style="background-color: #f9f9f9;"><th style="width: 35%; border: 1px solid #333; padding: 4px;">Параметр</th><th style="width: 20%; border: 1px solid #333; padding: 4px;">Значение</th><th style="width: 45%; border: 1px solid #333; padding: 4px;">Изображение</th></tr></thead><tbody>'
-            
+            html += f'<div style="margin-bottom: 15px;"><h3 style="font-size: 10pt; margin-bottom: 3px; border-bottom: 1px solid #eee;">{item["name"]}</h3><table style="width: 100%; border-collapse: collapse; table-layout: fixed;"><thead><tr style="background-color: #f9f9f9;"><th style="width: 35%; border: 1px solid #333; padding: 4px; font-size: 10pt;">Параметр</th><th style="width: 20%; border: 1px solid #333; padding: 4px; font-size: 10pt;">Значение</th><th style="width: 45%; border: 1px solid #333; padding: 4px; font-size: 10pt;">Изображение</th></tr></thead><tbody>'
             for row_index, s in enumerate(specs):
                 spec_name = s.get('name') or s.get('spec_parameter_name', '')
                 spec_value = s.get('value') or s.get('spec_parameter_value', '')
+                is_video_link = s.get('is_video_link', False)
                 rowspan, img = image_cell_at_row(row_index)
                 img_td = ''
                 if rowspan is not None:
@@ -1841,7 +1758,18 @@ class ExportService:
                         img_td = f'<td style="width: 45%; border: 1px solid #333; padding: 4px; text-align: center; vertical-align: middle;" rowspan="{rowspan}"><img src="{img_path}" style="width: 95%; height: auto; object-fit: contain; display: block; margin: 0 auto;">{caption_html}</td>'
                     else:
                         img_td = f'<td style="width: 45%; border: 1px solid #333; padding: 4px; vertical-align: middle;" rowspan="{rowspan}"></td>'
-                html += f'<tr><td style="width: 35%; border: 1px solid #333; padding: 2px;">{spec_name}</td><td style="width: 20%; border: 1px solid #333; padding: 2px;">{spec_value}</td>{img_td}</tr>'
+
+                if is_video_link:
+                    display_name = escape(str(spec_name))
+                    if 'http' in spec_name:
+                        parts = spec_name.split(': ', 1)
+                        if len(parts) == 2:
+                            label, url = parts
+                            display_name = f'{escape(label)}: <a href="{url}" style="color: blue; text-decoration: underline;">{escape(url)}</a>'
+                    html += f'<tr><td colspan="2" style="border: 1px solid #333; padding: 4px; font-size: 10pt;">{display_name}</td>{img_td}</tr>'
+                else:
+                    spec_value_html = f'<a href="{spec_value}" style="color: blue; text-decoration: underline;">{spec_value}</a>' if str(spec_value).startswith('http') else escape(str(spec_value))
+                    html += f'<tr><td style="width: 35%; border: 1px solid #333; padding: 4px; font-size: 10pt;">{escape(str(spec_name))}</td><td style="width: 20%; border: 1px solid #333; padding: 4px; font-size: 10pt;">{spec_value_html}</td>{img_td}</tr>'
             html += '</tbody></table></div>'
         return html
 
@@ -1850,36 +1778,14 @@ class ExportService:
         items = self.data_pkg.get('equipment_list', [])
         html = ""
         details_dict = self.data_pkg.get('equipment_details', {})
-        
         for item in items:
             eq_id = item.get('equipment_id')
-            if not eq_id:
-                continue
-            
-            # Try both int and str keys (JSON serialization may convert int keys to strings)
-            details = None
-            if eq_id in details_dict:
-                details = details_dict[eq_id]
-            elif str(eq_id) in details_dict:
-                details = details_dict[str(eq_id)]
-            elif isinstance(eq_id, str) and int(eq_id) in details_dict:
-                details = details_dict[int(eq_id)]
-            
-            if not details or len(details) == 0:
-                continue
-            
-            html += f'<div class="details-section" style="margin-bottom: 15px;">'
-            html += f'<h3 style="font-size: 9pt; margin-bottom: 3px;">{item["name"]}</h3>'
-            html += f'<table style="width: 100%; border-collapse: collapse;">'
+            if not eq_id: continue
+            details = details_dict.get(eq_id) or details_dict.get(str(eq_id))
+            if not details: continue
+            html += f'<div style="margin-bottom: 15px;"><h3 style="font-size: 10pt; margin-bottom: 3px; border-bottom: 1px solid #eee;">{item["name"]}</h3><table style="width: 100%; border-collapse: collapse;">'
             for d in details:
-                detail_name = d.get('name') or d.get('detail_parameter_name', '')
-                detail_value = d.get('value') or d.get('detail_parameter_value', '')
-                html += f"""
-                <tr>
-                    <td style="width: {param_width}px; border: 1px solid #333; padding: 2px;">{detail_name}</td>
-                    <td style="border: 1px solid #333; padding: 2px;">{detail_value}</td>
-                </tr>
-                """
+                html += f'<tr><td style="width: {param_width}px; border: 1px solid #333; padding: 4px; font-size: 10pt;">{escape(str(d.get("name", "")))}</td><td style="border: 1px solid #333; padding: 4px; font-size: 10pt;">{escape(str(d.get("value", "")))}</td></tr>'
             html += '</table></div>'
         return html
 
@@ -1887,648 +1793,424 @@ class ExportService:
         items = self.data_pkg.get('equipment_list', [])
         html = ""
         processes_dict = self.data_pkg.get('tech_processes', {})
-        
         for item in items:
             eq_id = item.get('equipment_id')
-            if not eq_id:
-                continue
-            
-            # Try both int and str keys (JSON serialization may convert int keys to strings)
-            processes = None
-            if eq_id in processes_dict:
-                processes = processes_dict[eq_id]
-            elif str(eq_id) in processes_dict:
-                processes = processes_dict[str(eq_id)]
-            elif isinstance(eq_id, str) and int(eq_id) in processes_dict:
-                processes = processes_dict[int(eq_id)]
-            
-            if not processes or len(processes) == 0:
-                continue
-            
-            html += f'<div class="tech-process-section" style="margin-bottom: 20px;">'
-            html += f'<h3 style="font-size: 9pt; margin-bottom: 5px;">{item["name"]}</h3>'
-            
+            if not eq_id: continue
+            processes = processes_dict.get(eq_id) or processes_dict.get(str(eq_id))
+            if not processes: continue
+            html += f'<div style="margin-bottom: 20px;"><h3 style="font-size: 10pt; margin-bottom: 5px; border-bottom: 1px solid #eee;">{item["name"]}</h3>'
             for proc in processes:
-                html += '<div style="margin-bottom: 5px; padding: 3px; border: 1px solid #ddd; background-color: #f9f9f9;">'
-                proc_title = proc.get('title') or proc.get('tech_name', '')
-                proc_value = proc.get('value') or proc.get('tech_value', '')
-                proc_desc = proc.get('desc') or proc.get('tech_desc', '')
-                
-                if proc_title:
-                    html += f'<div style="font-weight: bold; margin-bottom: 2px; font-size: 8pt;">{proc_title}</div>'
-                if proc_value:
-                    html += f'<div style="margin-bottom: 2px; font-size: 8pt;">{proc_value}</div>'
-                if proc_desc:
-                    html += f'<div style="color: #666; font-size: 7pt; margin-top: 2px;">{proc_desc}</div>'
+                html += '<div style="margin-bottom: 5px; padding: 4px; border: 1px solid #ddd; background-color: #f9f9f9;">'
+                title = proc.get('title') or proc.get('tech_name', '')
+                value = proc.get('value') or proc.get('tech_value', '')
+                desc = proc.get('desc') or proc.get('tech_desc', '')
+                if title: html += f'<div style="font-weight: bold; margin-bottom: 2px; font-size: 10pt;">{title}</div>'
+                if value: html += f'<div style="margin-bottom: 2px; font-size: 10pt;">{value}</div>'
+                if desc: html += f'<div style="color: #666; font-size: 9pt; margin-top: 2px;">{desc}</div>'
                 html += '</div>'
-            
             html += '</div>'
         return html
 
     def _get_photo_grid_html(self):
         items = self.data_pkg.get('equipment_list', [])
         html = '<div class="photo-grids-container">'
-        
         for item in items:
             images = item.get('images', [])
             if not images: continue
-            
-            name = item.get('name', 'Оборудование')
-            html += f"""
-            <table class="photo-grid-table" style="width: 100%; border-collapse: collapse; margin-bottom: 20px; page-break-inside: avoid;">
-                <thead>
-                    <tr style="background-color: #f9f9f9;"><th colspan="2" style="border: 1px solid #333; padding: 8px; text-align: left;">{name}</th></tr>
-                </thead>
-                <tbody>
-            """
-            # Pairs of images
+            html += f'<table style="width: 100%; border-collapse: collapse; margin-bottom: 20px; page-break-inside: avoid;"><thead><tr style="background-color: #f9f9f9;"><th colspan="2" style="border: 1px solid #333; padding: 8px; text-align: left; font-size: 10pt;">{item.get("name", "")}</th></tr></thead><tbody>'
             for i in range(0, len(images), 2):
                 pair = images[i:i+2]
                 html += '<tr>'
                 for img in pair:
                     url = img.get('url', '')
-                    caption = img.get('name', '')
-                    
-                    # Convert URL to local path for WeasyPrint if needed
-                    img_path = url
-                    if url.startswith('/media/'):
-                        media_rel = url[len(settings.MEDIA_URL):] if url.startswith(settings.MEDIA_URL) else url[7:]
-                        local_path = os.path.join(settings.MEDIA_ROOT, media_rel)
-                        if os.path.exists(local_path):
-                            img_path = 'file://' + local_path
-                    elif url.startswith('http'):
-                        # For external URLs, use as-is (WeasyPrint can handle some URLs)
-                        img_path = url
-                    elif url.startswith('/static/'):
-                        static_rel = url[len(settings.STATIC_URL):] if url.startswith(settings.STATIC_URL) else url[8:]
-                        local_path = os.path.join(settings.BASE_DIR, 'static', static_rel)
-                        if os.path.exists(local_path):
-                            img_path = 'file://' + local_path
-                    
-                    html += f"""
-                    <td style="width: 50%; height: 70mm; border: 1px solid #333; text-align: center; vertical-align: middle; padding: 5px;">
-                        <img src="{img_path}" style="max-width: 100%; max-height: 60mm; object-fit: contain;">
-                        <div style="font-size: 8pt; margin-top: 5px; color: #666;">{caption}</div>
-                    </td>
-                    """
-                if len(pair) == 1:
-                    html += '<td style="width: 50%; border: 1px solid #333;"></td>'
+                    img_path = self._resolve_image_path_for_pdf(url)
+                    html += f'<td style="width: 50%; height: 70mm; border: 1px solid #333; text-align: center; vertical-align: middle; padding: 5px;"><img src="{img_path}" style="max-width: 100%; max-height: 60mm; object-fit: contain;"><div style="font-size: 9pt; margin-top: 5px; color: #666;">{img.get("name", "")}</div></td>'
+                if len(pair) == 1: html += '<td style="width: 50%; border: 1px solid #333;"></td>'
                 html += '</tr>'
             html += '</tbody></table>'
-        html += '</div>'
-        return html
+        return html + '</div>'
 
-    def _get_total_price_html(self):
+    def generate_docx(self):
+        """Generates DOCX using docxtpl and base_proposal.docx template."""
+        import io, re, os
+        template_path = os.path.join(settings.BASE_DIR, 'proposals/templates/base_proposal.docx')
+        if not os.path.exists(template_path): return self._generate_docx_manual_fallback()
+        try:
+            doc = DocxTemplate(template_path)
+            proposal_data = self.data_pkg.get('proposal', {})
+            def clean_header_html(html_text):
+                if not html_text: return ""
+                text = re.sub(r'<br\s*/?>', '\n', html_text)
+                text = re.sub(r'</p>', '\n', text)
+                return re.sub(r'<[^>]+>', '', text).strip()
+                
+            header_subdoc = doc.new_subdoc()
+            header_table = header_subdoc.add_table(rows=1, cols=2)
+            header_table.columns[0].width = Mm(65)
+            header_table.columns[1].width = Mm(65)
+            
+            kz_info = clean_header_html(self.header_data.get('kz_info', ''))
+            if kz_info:
+                p_kz = header_table.cell(0, 0).paragraphs[0]
+                p_kz.add_run(kz_info).font.size = Pt(9)
+                
+            ru_info = clean_header_html(self.header_data.get('ru_info', ''))
+            if ru_info:
+                p_ru = header_table.cell(0, 1).paragraphs[0]
+                p_ru.add_run(ru_info).font.size = Pt(9)
+            
+            logo_image = None
+            logo_url = self.data_pkg.get('company_logo_url')
+            if logo_url:
+                rel = logo_url[len(settings.MEDIA_URL):] if logo_url.startswith(settings.MEDIA_URL) else logo_url[7:]
+                final_path = os.path.join(settings.MEDIA_ROOT, rel)
+                if not os.path.exists(final_path): final_path = os.path.join(settings.BASE_DIR, 'static/assets/prosnab_logo.png')
+                if os.path.exists(final_path):
+                    logo_image = InlineImage(doc, final_path, width=Mm(40))
+            
+            context = {
+                'number': proposal_data.get('number', ''),
+                'date': proposal_data.get('date', ''),
+                'header': proposal_data.get('header', ''),
+                'kz_info_clean': header_subdoc,
+                'ru_info_clean': '',
+                'company_logo_image': logo_image,
+                'blocks': []
+            }
+            for block in self.layout_data:
+                content = block.get('content', '')
+                subdoc = doc.new_subdoc()
+                
+                title_text = block.get('title', '')
+                if title_text:
+                    p_title = subdoc.add_paragraph(title_text)
+                    p_title.style.font.bold = True
+                    p_title.style.font.size = Pt(12)
+                    p_title.style.font.color.rgb = RGBColor(0, 0, 0)
+                    
+                had_placeholder = False
+                if '{equipment_list}' in content:
+                    self._add_equipment_table_docx(subdoc)
+                    had_placeholder = True
+                if '{total_price_table}' in content:
+                    self._add_total_price_docx(subdoc)
+                    had_placeholder = True
+                if '{additional_services_table}' in content:
+                    self._add_additional_services_docx(subdoc)
+                    had_placeholder = True
+                if '{equipment_specs}' in content or '{equipment_specification}' in content:
+                    self._add_equipment_specs_docx(subdoc)
+                    had_placeholder = True
+                if '{equipment_details}' in content or '{equipment_detail}' in content:
+                    self._add_equipment_details_docx(subdoc)
+                    had_placeholder = True
+                if '{equipment_tech_process}' in content:
+                    self._add_equipment_tech_process_docx(subdoc)
+                    had_placeholder = True
+                if '{equipment_photo_grid}' in content:
+                    self._add_photo_grid_docx(subdoc)
+                    had_placeholder = True
+                
+                if not had_placeholder:
+                    parser = DocxHTMLParser(subdoc)
+                    parser.feed(content)
+                    
+                    # Remove trailing empty paragraphs
+                    for p in reversed(subdoc.paragraphs):
+                        if not p.text.strip() and not any(r.text.strip() for r in p.runs if r.text):
+                            p._element.getparent().remove(p._element)
+                        else:
+                            break
+                
+                context['blocks'].append({'title': '', 'content_processed': subdoc})
+            
+            doc.render(context)
+            stream = io.BytesIO()
+            doc.save(stream)
+            stream.seek(0)
+            return stream
+        except Exception as e:
+            logger.error(f"DOCX generation failed: {e}", exc_info=True)
+            return self._generate_docx_manual_fallback()
+
+    def _set_cell_background(self, cell, fill):
+        """Helper to add background shading to a docx table cell."""
+        shading_elm = parse_xml(r'<w:shd {} w:fill="{}"/>'.format(nsdecls('w'), fill))
+        cell._tc.get_or_add_tcPr().append(shading_elm)
+
+    def _add_equipment_table_docx(self, doc):
+        items = self.data_pkg.get('equipment_list', [])
+        currency = self.proposal.currency_ticket
+        table = doc.add_table(rows=1, cols=6)
+        table.style = 'Table Grid'
+        
+        widths = [Mm(10), Mm(60), Mm(15), Mm(15), Mm(30), Mm(30)]
+        for idx, width in enumerate(widths):
+            table.columns[idx].width = width
+            
+        hdr_cells = table.rows[0].cells
+        for i, text in enumerate(['№', 'Наименование', 'Кол-во', 'Ед.', 'Цена', 'Сумма']):
+            hdr_cells[i].text = text
+            hdr_cells[i].width = widths[i]
+            hdr_cells[i].paragraphs[0].runs[0].font.bold = True
+            hdr_cells[i].paragraphs[0].runs[0].font.size = Pt(10)
+            self._set_cell_background(hdr_cells[i], 'f2f2f2')
+        
+        total_sum = 0
+        for i, item in enumerate(items, 1):
+            row = table.add_row().cells
+            for idx, width in enumerate(widths):
+                row[idx].width = width
+            row[0].text = str(i)
+            row[0].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+            
+            p_name = row[1].paragraphs[0]
+            p_name.add_run(item.get('name', '')).bold = True
+            
+            if item.get('description'):
+                p_desc = row[1].add_paragraph(item.get('description'))
+                p_desc.style.font.size = Pt(9)
+                
+            if item.get('article'):
+                p_art = row[1].add_paragraph(f"Арт: {item.get('article')}")
+                p_art.style.font.size = Pt(9)
+                p_art.style.font.color.rgb = RGBColor(102, 102, 102)
+                
+            row[2].text = str(item.get('quantity', 0))
+            row[2].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+            
+            row[3].text = item.get('unit', 'шт')
+            row[3].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+            
+            price = float(item.get('price_per_unit', 0))
+            row[4].text = f"{price:,.2f} {currency}"
+            row[4].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
+            
+            total = float(item.get('total_price', 0))
+            total_sum += total
+            row[5].text = f"{total:,.2f} {currency}"
+            row[5].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
+            
+            for c in row: 
+                if c.paragraphs and c.paragraphs[0].runs:
+                    c.paragraphs[0].runs[0].font.size = Pt(10)
+        
+        row = table.add_row().cells
+        row[0].merge(row[4])
+        row[0].text = "Итого:"
+        row[0].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
+        row[5].text = f"{total_sum:,.2f} {currency}"
+        row[5].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
+        
+        self._set_cell_background(row[0], 'f5f5f5')
+        self._set_cell_background(row[5], 'f5f5f5')
+        
+        row[0].paragraphs[0].runs[0].font.bold = True
+        row[5].paragraphs[0].runs[0].font.bold = True
+        row[0].paragraphs[0].runs[0].font.size = Pt(10)
+        row[5].paragraphs[0].runs[0].font.size = Pt(10)
+
+    def _add_total_price_docx(self, doc):
         p = self.data_pkg.get('proposal', {})
         total = float(p.get("total_price", 0))
         currency = p.get("currency", "")
-        # Summary looks like a simple right-aligned big text or small table
-        return f"""
-        <div class="total-price-section" style="margin-top: 30px; border-top: 1px solid #eee; padding-top: 10px;">
-            <table style="width: auto; margin-left: auto; border: none;">
-                <tr style="border: none;">
-                    <td style="border: none; text-align: right; font-size: 9pt; padding: 2px;">ИТОГО:</td>
-                    <td style="border: none; text-align: right; font-size: 10pt; font-weight: bold; padding: 2px;">{total:,.2f} {currency}</td>
-                </tr>
-            </table>
-        </div>
-        """
+        para = doc.add_paragraph()
+        para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+        run = para.add_run(f"ИТОГО: {total:,.2f} {currency}")
+        run.font.size = Pt(10)
+        run.font.bold = True
 
-    def generate_docx(self):
-        """Generates DOCX using python-docx, matching PDF format exactly."""
-        from docx import Document
-        from docx.shared import Inches, Pt, RGBColor
-        from docx.enum.text import WD_ALIGN_PARAGRAPH
-        from docx.oxml.ns import qn
-        from docx.oxml import OxmlElement
-        from django.conf import settings
+    def _add_additional_services_docx(self, doc):
+        services = self.data_pkg.get('additional_services', [])
+        if not services: return
+        currency = self.proposal.currency_ticket
+        table = doc.add_table(rows=1, cols=2)
+        table.style = 'Table Grid'
+        hdr = table.rows[0].cells
+        hdr[0].text = 'Описание'
+        hdr[1].text = 'Стоимость'
+        for c in hdr:
+            c.paragraphs[0].runs[0].font.bold = True
+            c.paragraphs[0].runs[0].font.size = Pt(10)
+            self._set_cell_background(c, 'f2f2f2')
+        for s in services:
+            row = table.add_row().cells
+            row[0].text = s.get('description') or s.get('name', '')
+            row[1].text = f"{float(s.get('price', 0)):,.2f} {currency}"
+            row[1].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
+            for c in row: c.paragraphs[0].runs[0].font.size = Pt(10)
+
+    def _add_equipment_specs_docx(self, doc):
+        items = self.data_pkg.get('equipment_list', [])
+        specs_dict = self.data_pkg.get('equipment_specifications', {})
+        for item in items:
+            eq_id = item.get('equipment_id')
+            specs = specs_dict.get(eq_id) or specs_dict.get(str(eq_id))
+            if not specs: continue
+            
+            doc.add_heading(item.get('name', ''), level=3).style.font.size = Pt(10)
+            images = item.get('images', [])
+            has_images = len(images) > 0
+            cols = 3 if has_images else 2
+            
+            table = doc.add_table(rows=1, cols=cols)
+            table.style = 'Table Grid'
+            hdr = table.rows[0].cells
+            hdr[0].text = 'Параметр'; hdr[1].text = 'Значение'
+            if has_images: hdr[2].text = 'Изображение'
+            
+            for c in hdr: 
+                c.paragraphs[0].runs[0].font.size = Pt(10)
+                c.paragraphs[0].runs[0].font.bold = True
+                self._set_cell_background(c, 'f9f9f9')
+            
+            total_rows = len(specs)
+            num_photos = len(images)
+            base_rowspan = total_rows // num_photos if num_photos else 0
+            remainder = total_rows % num_photos if num_photos else 0
+            
+            def image_cell_at_row(row_index):
+                if num_photos == 0: return (None, None)
+                start = 0
+                for i in range(num_photos):
+                    r = base_rowspan + (1 if i < remainder else 0)
+                    if row_index == start: return (r, images[i])
+                    start += r
+                return (None, None)
+
+            table_rows = []
+            for row_index, s in enumerate(specs):
+                row = table.add_row().cells
+                table_rows.append(row)
+                
+                is_video_link = s.get('is_video_link', False)
+                if is_video_link:
+                    row[0].merge(row[1])
+                    row[0].text = s.get('name', '')
+                    row[0].paragraphs[0].runs[0].font.size = Pt(10)
+                else:
+                    row[0].text = s.get('name') or s.get('spec_parameter_name', '')
+                    row[1].text = str(s.get('value') or s.get('spec_parameter_value', ''))
+                    row[0].paragraphs[0].runs[0].font.size = Pt(10)
+                    if row[1].paragraphs and row[1].paragraphs[0].runs:
+                        row[1].paragraphs[0].runs[0].font.size = Pt(10)
+                    else:
+                        row[1].add_paragraph().add_run().font.size = Pt(10)
+            
+            # Apply rowspans and insert images
+            if has_images:
+                for row_index, row in enumerate(table_rows):
+                    rowspan, img = image_cell_at_row(row_index)
+                    if rowspan is not None:
+                        if rowspan > 1:
+                            target_cell = table_rows[row_index + rowspan - 1][2]
+                            row[2].merge(target_cell)
+                        
+                        if img and img.get('url'):
+                            url = img.get('url', '')
+                            rel = url[len(settings.MEDIA_URL):] if url.startswith(settings.MEDIA_URL) else url[7:]
+                            path = os.path.join(settings.MEDIA_ROOT, rel)
+                            if os.path.exists(path):
+                                para = row[2].paragraphs[0]
+                                para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                                para.add_run().add_picture(path, width=Inches(2.0))
+                                caption = (img.get('name') or '').strip()
+                                if caption:
+                                    cap_para = row[2].add_paragraph(caption)
+                                    cap_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                                    cap_para.style.font.size = Pt(8)
+                                    cap_para.style.font.color.rgb = RGBColor(102, 102, 102)
+
+            doc.add_paragraph('')
+
+    def _add_equipment_details_docx(self, doc, col_widths=None):
+        items = self.data_pkg.get('equipment_list', [])
+        details_dict = self.data_pkg.get('equipment_details', {})
+        for item in items:
+            eq_id = item.get('equipment_id')
+            details = details_dict.get(eq_id) or details_dict.get(str(eq_id))
+            if not details: continue
+            doc.add_heading(item.get('name', ''), level=3).style.font.size = Pt(10)
+            table = doc.add_table(rows=1, cols=2)
+            table.style = 'Table Grid'
+            hdr = table.rows[0].cells
+            hdr[0].text = 'Параметр'; hdr[1].text = 'Значение'
+            for c in hdr: 
+                c.paragraphs[0].runs[0].font.size = Pt(10)
+                c.paragraphs[0].runs[0].font.bold = True
+                self._set_cell_background(c, 'f9f9f9')
+            for d in details:
+                row = table.add_row().cells
+                row[0].text = d.get('name') or d.get('detail_parameter_name', '')
+                row[1].text = str(d.get('value') or d.get('detail_parameter_value', ''))
+                for c in row: 
+                    if c.paragraphs and c.paragraphs[0].runs:
+                        c.paragraphs[0].runs[0].font.size = Pt(10)
+            doc.add_paragraph('')
+
+    def _add_equipment_tech_process_docx(self, doc, col_widths=None):
+        items = self.data_pkg.get('equipment_list', [])
+        processes_dict = self.data_pkg.get('tech_processes', {})
+        for item in items:
+            eq_id = item.get('equipment_id')
+            processes = processes_dict.get(eq_id) or processes_dict.get(str(eq_id))
+            if not processes: continue
+            doc.add_heading(item.get('name', ''), level=3).style.font.size = Pt(10)
+            for proc in processes:
+                title = proc.get('title') or proc.get('tech_name', '')
+                value = proc.get('value') or proc.get('tech_value', '')
+                desc = proc.get('desc') or proc.get('tech_desc', '')
+                if title: 
+                    p = doc.add_paragraph(title)
+                    p.style.font.size = Pt(10)
+                    p.style.font.bold = True
+                if value: doc.add_paragraph(value).style.font.size = Pt(10)
+                if desc: 
+                    p = doc.add_paragraph(desc)
+                    p.style.font.size = Pt(9)
+                    p.style.font.italic = True
+                    p.style.font.color.rgb = RGBColor(102, 102, 102)
+            doc.add_paragraph('')
+
+    def _add_photo_grid_docx(self, doc):
+        items = self.data_pkg.get('equipment_list', [])
+        for item in items:
+            images = item.get('images', [])
+            if not images: continue
+            
+            table = doc.add_table(rows=1, cols=2)
+            table.style = 'Table Grid'
+            hdr = table.rows[0].cells
+            hdr[0].merge(hdr[1])
+            hdr[0].text = item.get('name', '')
+            hdr[0].paragraphs[0].runs[0].font.size = Pt(10)
+            hdr[0].paragraphs[0].runs[0].font.bold = True
+            self._set_cell_background(hdr[0], 'f9f9f9')
+            
+            for i in range(0, len(images), 2):
+                row = table.add_row().cells
+                for j, img in enumerate(images[i:i+2]):
+                    cell = row[j]
+                    url = img.get('url', '')
+                    rel = url[len(settings.MEDIA_URL):] if url.startswith(settings.MEDIA_URL) else url[7:]
+                    path = os.path.join(settings.MEDIA_ROOT, rel)
+                    if os.path.exists(path):
+                        para = cell.paragraphs[0]
+                        para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                        para.add_run().add_picture(path, width=Inches(2.8))
+                        if img.get('name'):
+                            cap = cell.add_paragraph(img.get('name'))
+                            cap.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                            cap.style.font.size = Pt(9)
+                            cap.style.font.color.rgb = RGBColor(102, 102, 102)
+            doc.add_paragraph('')
+
+    def _generate_docx_manual_fallback(self):
         import io
-        import re
-        import os
-        
         doc = Document()
-        
-        # Set default font sizes to match PDF (8pt normal, 9pt headings, 10pt large headings)
-        style = doc.styles['Normal']
-        font = style.font
-        font.name = 'Arial'
-        font.size = Pt(8)
-        
-        # Header section - matching PDF template
-        # Logo and company info table
-        header_table = doc.add_table(rows=1, cols=2)
-        header_table.style = 'Table Grid'
-        header_table.autofit = False
-        header_table.columns[0].width = Inches(2.5)
-        header_table.columns[1].width = Inches(4.5)
-        
-        # Logo cell
-        logo_cell = header_table.rows[0].cells[0]
-        logo_cell.vertical_alignment = 1  # WD_CELL_VERTICAL_ALIGNMENT.TOP
-        logo_para = logo_cell.paragraphs[0]
-        logo_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        
-        # Add logo if available
-        logo_url_or_path = self.data_pkg.get('company_logo_url')
-        if logo_url_or_path:
-            final_logo_path = ""
-            if logo_url_or_path.startswith('/media/'):
-                media_rel = logo_url_or_path[len(settings.MEDIA_URL):] if logo_url_or_path.startswith(settings.MEDIA_URL) else logo_url_or_path[7:]
-                final_logo_path = os.path.join(settings.MEDIA_ROOT, media_rel)
-            elif logo_url_or_path.startswith('/static/'):
-                static_rel = logo_url_or_path[len(settings.STATIC_URL):] if logo_url_or_path.startswith(settings.STATIC_URL) else logo_url_or_path[8:]
-                final_logo_path = os.path.join(settings.BASE_DIR, 'static', static_rel)
-            else:
-                final_logo_path = logo_url_or_path
-            
-            if os.path.exists(final_logo_path):
-                try:
-                    logo_para.add_run().add_picture(final_logo_path, width=Inches(1.5))
-                except:
-                    pass
-        
-        # Company info cell (two columns)
-        info_cell = header_table.rows[0].cells[1]
-        info_cell.vertical_alignment = 1
-        
-        # Create nested table for KZ and RU info
-        info_table = info_cell.add_table(rows=1, cols=3)
-        info_table.columns[0].width = Inches(2.0)
-        info_table.columns[1].width = Inches(0.05)
-        info_table.columns[2].width = Inches(2.0)
-        
-        # KZ info
-        kz_cell = info_table.rows[0].cells[0]
-        kz_para = kz_cell.paragraphs[0]
-        kz_info = self.header_data.get('kz_info', '')
-        if kz_info:
-            # Parse HTML and add as paragraphs
-            kz_text = re.sub(r'<[^>]+>', '\n', kz_info).strip()
-            for line in kz_text.split('\n'):
-                if line.strip():
-                    p = kz_cell.add_paragraph(line.strip())
-                    p.style.font.size = Pt(9)
-        
-        # Divider
-        divider_cell = info_table.rows[0].cells[1]
-        divider_cell.vertical_alignment = 1
-        
-        # RU info
-        ru_cell = info_table.rows[0].cells[2]
-        ru_para = ru_cell.paragraphs[0]
-        ru_info = self.header_data.get('ru_info', '')
-        if ru_info:
-            ru_text = re.sub(r'<[^>]+>', '\n', ru_info).strip()
-            for line in ru_text.split('\n'):
-                if line.strip():
-                    p = ru_cell.add_paragraph(line.strip())
-                    p.style.font.size = Pt(9)
-        
-        doc.add_paragraph('')  # Spacing
-        
-        # Meta info (number and date) - right aligned
-        proposal_data = self.data_pkg.get('proposal', {})
-        meta_para = doc.add_paragraph()
-        meta_para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-        meta_run = meta_para.add_run(f"Исх. № {proposal_data.get('number', '')} от {proposal_data.get('date', '')}")
-        meta_run.font.size = Pt(8)
-        meta_run.bold = True
-        
-        # Main title
-        title = doc.add_heading('КОММЕРЧЕСКОЕ ПРЕДЛОЖЕНИЕ', 0)
-        title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        title.style.font.size = Pt(8)
-        
-        # Proposal header/subtitle if exists
-        if proposal_data.get('header'):
-            subtitle = doc.add_paragraph(proposal_data.get('header'))
-            subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            subtitle.style.font.size = Pt(8)
-        
-        doc.add_paragraph('')  # Spacing
-        
-        # Process layout blocks - matching PDF exactly
-        placeholders_found = {
-            'total_price': False,
-            'equipment_list': False,
-        }
-        
-        for block in self.layout_data:
-            title_text = block.get('title', '')
-            content = block.get('content', '')
-            spacing = block.get('spacing', 15)
-            col_widths = block.get('columnWidths', {})
-            
-            # Add block title if exists
-            if title_text:
-                heading = doc.add_heading(title_text, level=2)
-                heading.style.font.size = Pt(9)
-            
-            # Replace placeholders - same logic as PDF
-            if '{equipment_list}' in content:
-                self._add_equipment_table_docx(doc, col_widths)
-                placeholders_found['equipment_list'] = True
-                content = content.replace('{equipment_list}', '')
-            if '{total_price_table}' in content:
-                self._add_total_price_docx(doc)
-                placeholders_found['total_price'] = True
-                content = content.replace('{total_price_table}', '')
-            if '{additional_services_table}' in content:
-                self._add_additional_services_table_docx(doc, col_widths)
-                content = content.replace('{additional_services_table}', '')
-            if '{equipment_specs}' in content:
-                self._add_equipment_specs_docx(doc, col_widths)
-                content = content.replace('{equipment_specs}', '')
-            if '{equipment_specification}' in content:
-                self._add_equipment_specs_docx(doc, col_widths)
-                content = content.replace('{equipment_specification}', '')
-            if '{equipment_details}' in content:
-                self._add_equipment_details_docx(doc, col_widths)
-                content = content.replace('{equipment_details}', '')
-            if '{equipment_detail}' in content:
-                self._add_equipment_details_docx(doc, col_widths)
-                content = content.replace('{equipment_detail}', '')
-            if '{equipment_tech_process}' in content:
-                self._add_equipment_tech_process_docx(doc, col_widths)
-                content = content.replace('{equipment_tech_process}', '')
-            if '{equipment_photo_grid}' in content:
-                self._add_photo_grid_docx(doc)
-                content = content.replace('{equipment_photo_grid}', '')
-            
-            # Add remaining content (remove HTML tags)
-            if content.strip():
-                clean_content = re.sub(r'<[^>]+>', '', content)
-                clean_content = clean_content.strip()
-                if clean_content:
-                    para = doc.add_paragraph(clean_content)
-                    para.style.font.size = Pt(8)
-            
-            # Add spacing between blocks
-            for _ in range(int(spacing / 5)):  # Approximate spacing
-                doc.add_paragraph('')
-        
-        # Ensure critical info is present (same as PDF)
-        if not placeholders_found['equipment_list']:
-            doc.add_heading('Спецификация оборудования', level=2).style.font.size = Pt(9)
-            self._add_equipment_table_docx(doc, {})
-        if not placeholders_found['total_price']:
-            self._add_total_price_docx(doc)
-        
+        doc.add_heading('Коммерческое предложение', 0)
+        self._add_equipment_table_docx(doc)
         stream = io.BytesIO()
         doc.save(stream)
         stream.seek(0)
         return stream
-    
-    def _add_equipment_table_docx(self, doc, col_widths):
-        """Add equipment table to DOCX document."""
-        from docx.shared import Pt, Inches
-        from docx.enum.text import WD_ALIGN_PARAGRAPH
-        
-        items = self.data_pkg.get('equipment_list', [])
-        currency = self.proposal.currency_ticket
-        
-        table = doc.add_table(rows=1, cols=6)
-        table.style = 'Table Grid'
-        
-        # Header row
-        hdr_cells = table.rows[0].cells
-        headers = ['№', 'Наименование', 'Кол-во', 'Ед.', 'Цена за ед.', 'Сумма']
-        for i, header in enumerate(headers):
-            hdr_cells[i].text = header
-            if i == 0 or i == 2 or i == 3:  # №, Кол-во, Ед. - center
-                hdr_cells[i].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-            else:
-                hdr_cells[i].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.LEFT
-            hdr_cells[i].paragraphs[0].runs[0].font.bold = True
-            hdr_cells[i].paragraphs[0].runs[0].font.size = Pt(8)
-        
-        # Calculate total sum
-        total_sum = 0
-        
-        # Data rows
-        for i, item in enumerate(items, 1):
-            row_cells = table.add_row().cells
-            row_cells[0].text = str(i)
-            row_cells[0].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-            row_cells[0].paragraphs[0].runs[0].font.size = Pt(8)
-            
-            # Name cell with description and article
-            name_para = row_cells[1].paragraphs[0]
-            name_run = name_para.add_run(item.get('name', ''))
-            name_run.font.bold = True
-            name_run.font.size = Pt(8)
-            
-            if item.get('description'):
-                name_para.add_run(f"\n{item.get('description')}").font.size = Pt(8)
-            if item.get('article'):
-                name_para.add_run(f"\nАрт: {item.get('article')}").font.size = Pt(8)
-            row_cells[1].paragraphs[0].runs[0].font.size = Pt(8)
-            
-            row_cells[2].text = str(item.get('quantity', 0))
-            row_cells[2].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-            row_cells[2].paragraphs[0].runs[0].font.size = Pt(8)
-            
-            row_cells[3].text = item.get('unit', '')
-            row_cells[3].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-            row_cells[3].paragraphs[0].runs[0].font.size = Pt(8)
-            
-            price_text = f"{float(item.get('price_per_unit', 0)):,.2f} {currency}"
-            row_cells[4].text = price_text
-            row_cells[4].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
-            row_cells[4].paragraphs[0].runs[0].font.size = Pt(8)
-            
-            total_price = float(item.get('total_price', 0))
-            total_sum += total_price
-            total_text = f"{total_price:,.2f} {currency}"
-            row_cells[5].text = total_text
-            row_cells[5].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
-            row_cells[5].paragraphs[0].runs[0].font.size = Pt(8)
-        
-        # Add total row
-        total_row = table.add_row()
-        total_cells = total_row.cells
-        
-        # Merge first 5 cells for "Итого:"
-        total_cells[0].merge(total_cells[1])
-        total_cells[0].merge(total_cells[2])
-        total_cells[0].merge(total_cells[3])
-        total_cells[0].merge(total_cells[4])
-        
-        total_cells[0].text = 'Итого:'
-        total_cells[0].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
-        total_cells[0].paragraphs[0].runs[0].font.bold = True
-        total_cells[0].paragraphs[0].runs[0].font.size = Pt(8)
-        
-        # Set background color for total row (gray)
-        from docx.oxml import OxmlElement
-        from docx.oxml.ns import qn
-        
-        for cell in total_row.cells:
-            shading = OxmlElement('w:shd')
-            shading.set(qn('w:fill'), 'F5F5F5')
-            cell._element.get_or_add_tcPr().append(shading)
-        
-        total_text = f"{total_sum:,.2f} {currency}"
-        total_cells[5].text = total_text
-        total_cells[5].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
-        total_cells[5].paragraphs[0].runs[0].font.bold = True
-        total_cells[5].paragraphs[0].runs[0].font.size = Pt(8)
-    
-    def _add_additional_services_table_docx(self, doc, col_widths):
-        """Add additional services table to DOCX document."""
-        from docx.shared import Pt
-        from docx.enum.text import WD_ALIGN_PARAGRAPH
-        
-        services = self.data_pkg.get('additional_services', [])
-        if not services:
-            return
-        
-        currency = self.proposal.currency_ticket
-        table = doc.add_table(rows=1, cols=2)
-        table.style = 'Table Grid'
-        
-        hdr_cells = table.rows[0].cells
-        hdr_cells[0].text = 'Описание'
-        hdr_cells[0].paragraphs[0].runs[0].font.bold = True
-        hdr_cells[0].paragraphs[0].runs[0].font.size = Pt(8)
-        hdr_cells[1].text = 'Стоимость'
-        hdr_cells[1].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
-        hdr_cells[1].paragraphs[0].runs[0].font.bold = True
-        hdr_cells[1].paragraphs[0].runs[0].font.size = Pt(8)
-        
-        for s in services:
-            row_cells = table.add_row().cells
-            # В форме: name = "Название", description = "Описание". Показываем как в конструкторе: description || name
-            title = s.get('description') or s.get('name', '') or ''
-            row_cells[0].text = title
-            row_cells[0].paragraphs[0].runs[0].font.size = Pt(8)
-            price_text = f"{float(s.get('price', 0)):,.2f} {currency}"
-            row_cells[1].text = price_text
-            row_cells[1].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
-            row_cells[1].paragraphs[0].runs[0].font.size = Pt(8)
-    
-    def _add_equipment_specs_docx(self, doc, col_widths):
-        """Add equipment specifications to DOCX document."""
-        from docx.shared import Pt
-        
-        items = self.data_pkg.get('equipment_list', [])
-        specs_dict = self.data_pkg.get('equipment_specifications', {})
-        
-        # If specs_dict is empty, try to get from database directly
-        if not specs_dict or len(specs_dict) == 0:
-            from .services import DataAggregatorService
-            aggregator = DataAggregatorService(self.proposal)
-            specs_dict = aggregator._get_equipment_specifications()
-        
-        for item in items:
-            eq_id = item.get('equipment_id')
-            if not eq_id:
-                continue
-            
-            # Try both int and str keys
-            specs = None
-            if eq_id in specs_dict:
-                specs = specs_dict[eq_id]
-            elif str(eq_id) in specs_dict:
-                specs = specs_dict[str(eq_id)]
-            
-            if not specs or len(specs) == 0:
-                continue
-            
-            # Equipment name heading
-            heading = doc.add_heading(item.get('name', ''), level=3)
-            heading.style.font.size = Pt(9)
-            
-            # Specs table
-            table = doc.add_table(rows=1, cols=2)
-            table.style = 'Table Grid'
-            
-            hdr_cells = table.rows[0].cells
-            hdr_cells[0].text = 'Параметр'
-            hdr_cells[0].paragraphs[0].runs[0].font.bold = True
-            hdr_cells[0].paragraphs[0].runs[0].font.size = Pt(8)
-            hdr_cells[1].text = 'Значение'
-            hdr_cells[1].paragraphs[0].runs[0].font.bold = True
-            hdr_cells[1].paragraphs[0].runs[0].font.size = Pt(8)
-            
-            for s in specs:
-                row_cells = table.add_row().cells
-                spec_name = s.get('name') or s.get('spec_parameter_name', '')
-                spec_value = s.get('value') or s.get('spec_parameter_value', '')
-                row_cells[0].text = spec_name
-                row_cells[0].paragraphs[0].runs[0].font.size = Pt(8)
-                row_cells[1].text = spec_value
-                row_cells[1].paragraphs[0].runs[0].font.size = Pt(8)
-            
-            doc.add_paragraph('')  # Spacing
-    
-    def _add_equipment_details_docx(self, doc, col_widths):
-        """Add equipment details to DOCX document."""
-        from docx.shared import Pt
-        
-        items = self.data_pkg.get('equipment_list', [])
-        details_dict = self.data_pkg.get('equipment_details', {})
-        
-        for item in items:
-            eq_id = item.get('equipment_id')
-            if not eq_id:
-                continue
-            
-            # Try both int and str keys
-            details = None
-            if eq_id in details_dict:
-                details = details_dict[eq_id]
-            elif str(eq_id) in details_dict:
-                details = details_dict[str(eq_id)]
-            
-            if not details or len(details) == 0:
-                continue
-            
-            # Equipment name heading
-            heading = doc.add_heading(item.get('name', ''), level=3)
-            heading.style.font.size = Pt(9)
-            
-            # Details table
-            table = doc.add_table(rows=1, cols=2)
-            table.style = 'Table Grid'
-            
-            hdr_cells = table.rows[0].cells
-            hdr_cells[0].text = 'Параметр'
-            hdr_cells[0].paragraphs[0].runs[0].font.bold = True
-            hdr_cells[0].paragraphs[0].runs[0].font.size = Pt(8)
-            hdr_cells[1].text = 'Значение'
-            hdr_cells[1].paragraphs[0].runs[0].font.bold = True
-            hdr_cells[1].paragraphs[0].runs[0].font.size = Pt(8)
-            
-            for d in details:
-                row_cells = table.add_row().cells
-                detail_name = d.get('name') or d.get('detail_parameter_name', '')
-                detail_value = d.get('value') or d.get('detail_parameter_value', '')
-                row_cells[0].text = detail_name
-                row_cells[0].paragraphs[0].runs[0].font.size = Pt(8)
-                row_cells[1].text = detail_value
-                row_cells[1].paragraphs[0].runs[0].font.size = Pt(8)
-            
-            doc.add_paragraph('')  # Spacing
-    
-    def _add_equipment_tech_process_docx(self, doc, col_widths):
-        """Add equipment tech processes to DOCX document."""
-        from docx.shared import Pt
-        
-        items = self.data_pkg.get('equipment_list', [])
-        processes_dict = self.data_pkg.get('tech_processes', {})
-        
-        for item in items:
-            eq_id = item.get('equipment_id')
-            if not eq_id:
-                continue
-            
-            # Try both int and str keys
-            processes = None
-            if eq_id in processes_dict:
-                processes = processes_dict[eq_id]
-            elif str(eq_id) in processes_dict:
-                processes = processes_dict[str(eq_id)]
-            
-            if not processes or len(processes) == 0:
-                continue
-            
-            # Equipment name heading
-            heading = doc.add_heading(item.get('name', ''), level=3)
-            heading.style.font.size = Pt(9)
-            
-            for proc in processes:
-                proc_title = proc.get('title') or proc.get('tech_name', '')
-                proc_value = proc.get('value') or proc.get('tech_value', '')
-                proc_desc = proc.get('desc') or proc.get('tech_desc', '')
-                
-                if proc_title:
-                    p = doc.add_paragraph(proc_title)
-                    p.style.font.size = Pt(8)
-                    p.style.font.bold = True
-                if proc_value:
-                    p = doc.add_paragraph(proc_value)
-                    p.style.font.size = Pt(8)
-                if proc_desc:
-                    p = doc.add_paragraph(proc_desc)
-                    p.style.font.size = Pt(7)
-                    p.style.font.italic = True
-            
-            doc.add_paragraph('')  # Spacing
-    
-    def _add_photo_grid_docx(self, doc):
-        """Add equipment photos to DOCX document."""
-        from docx.shared import Inches, Pt
-        from docx.enum.text import WD_ALIGN_PARAGRAPH
-        
-        items = self.data_pkg.get('equipment_list', [])
-        
-        for item in items:
-            images = item.get('images', [])
-            if not images:
-                continue
-            
-            # Equipment name heading
-            heading = doc.add_heading(item.get('name', ''), level=3)
-            heading.style.font.size = Pt(9)
-            
-            # Create table for photos (2 columns)
-            table = doc.add_table(rows=1, cols=2)
-            table.style = 'Table Grid'
-            
-            for i, img in enumerate(images):
-                if i % 2 == 0 and i > 0:
-                    table.add_row()
-                
-                row_idx = i // 2
-                col_idx = i % 2
-                cell = table.rows[row_idx].cells[col_idx]
-                cell.vertical_alignment = 1
-                
-                url = img.get('url', '')
-                caption = img.get('name', '')
-                
-                # Try to add image
-                img_path = url
-                if url.startswith('/media/'):
-                    media_rel = url[len(settings.MEDIA_URL):] if url.startswith(settings.MEDIA_URL) else url[7:]
-                    local_path = os.path.join(settings.MEDIA_ROOT, media_rel)
-                    if os.path.exists(local_path):
-                        img_path = local_path
-                elif url.startswith('/static/'):
-                    static_rel = url[len(settings.STATIC_URL):] if url.startswith(settings.STATIC_URL) else url[8:]
-                    local_path = os.path.join(settings.BASE_DIR, 'static', static_rel)
-                    if os.path.exists(local_path):
-                        img_path = local_path
-                
-                if os.path.exists(img_path):
-                    try:
-                        para = cell.paragraphs[0]
-                        para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                        para.add_run().add_picture(img_path, width=Inches(2.5))
-                        if caption:
-                            cap_para = cell.add_paragraph(caption)
-                            cap_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                            cap_para.style.font.size = Pt(8)
-                    except:
-                        pass
-            
-            doc.add_paragraph('')  # Spacing
-    
-    def _add_total_price_docx(self, doc):
-        """Add total price to DOCX document."""
-        from docx.shared import Pt
-        from docx.enum.text import WD_ALIGN_PARAGRAPH
-        
-        p = self.data_pkg.get('proposal', {})
-        total = float(p.get("total_price", 0))
-        currency = p.get("currency", "")
-        
-        para = doc.add_paragraph()
-        para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-        run1 = para.add_run('ИТОГО: ')
-        run1.font.size = Pt(9)
-        run2 = para.add_run(f"{total:,.2f} {currency}")
-        run2.font.size = Pt(10)
-        run2.font.bold = True
-

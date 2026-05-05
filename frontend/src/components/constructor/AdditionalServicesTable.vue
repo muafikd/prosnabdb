@@ -96,8 +96,8 @@ const formatPrice = (value: number | string, currency: string) => {
 .services-table {
   width: 100%;
   border-collapse: collapse;
-  font-family: Arial, sans-serif;
-  font-size: 10pt;
+  font-family: 'Times New Roman', Times, serif;
+  font-size: 16px; /* 12pt */
 }
 
 .services-table th,

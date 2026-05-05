@@ -98,28 +98,35 @@ const updateContent = (field: string, event: FocusEvent) => {
   flex: 0 0 65%;
   display: flex;
   justify-content: space-between;
-  font-size: 9pt; /* Adjust size to match dense text */
+  font-size: 9pt; 
   line-height: 1.2;
 }
 
 .info-column {
   flex: 1;
+  font-size: 9pt;
 }
 
 .vertical-divider {
   width: 1px;
   background-color: #000;
   margin: 0 10px;
-  align-self: stretch; /* Make it full height */
+  align-self: stretch;
+}
+
+.editable-info {
+  font-size: 9pt;
 }
 
 .company-name {
   font-weight: bold;
-  margin-bottom: 4px;
+  margin-bottom: 2px;
+  font-size: 9pt;
 }
 
 p {
   margin: 0;
   padding: 0;
+  font-size: 9pt;
 }
 </style>

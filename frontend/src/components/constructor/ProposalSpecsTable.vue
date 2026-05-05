@@ -4,7 +4,6 @@
       <div v-if="hasSpecs(item.equipment_id)">
         <h3>{{ item.name }}</h3>
         
-        <!-- Table: Параметр 35%, Значение 20%, Изображение 45% -->
         <table class="specs-table">
           <thead>
              <tr>
@@ -15,8 +14,25 @@
           </thead>
           <tbody>
             <tr v-for="(spec, rowIndex) in getSpecs(item.equipment_id)" :key="rowIndex">
-              <td class="col-param">{{ spec.name }}</td>
-              <td class="col-value">{{ spec.value }}</td>
+              <!-- Combined row for video link -->
+              <template v-if="spec.is_video_link">
+                <td colspan="2" class="col-combined">
+                  <span v-html="formatVideoLink(spec.name)"></span>
+                </td>
+              </template>
+              <template v-else>
+                <td class="col-param">{{ spec.name }}</td>
+                <td class="col-value">
+                  <template v-if="String(spec.value).startsWith('http')">
+                    <a :href="spec.value" target="_blank" class="clickable-link">{{ spec.value }}</a>
+                  </template>
+                  <template v-else>
+                    {{ spec.value }}
+                  </template>
+                </td>
+              </template>
+
+              <!-- Image Cell (handles rowspan) -->
               <td
                 v-if="getImageCellAt(item.equipment_id, rowIndex)"
                 v-bind="getImageCellAt(item.equipment_id, rowIndex)!.attrs"
@@ -36,7 +52,6 @@
             </tr>
           </tbody>
         </table>
-
       </div>
     </div>
   </div>
@@ -48,7 +63,6 @@ import { getImageSrc } from '@/utils/imageProxy'
 
 const props = defineProps<{
   dataPackage: any
-  /** Не используется: ширина столбцов фиксирована 35% / 20% / 45%. Оставлено для совместимости с конструктором. */
   columnWidths?: Record<string, number>
 }>()
 
@@ -63,16 +77,17 @@ const getSpecs = (id: number) => {
   return specsMap.value[id] || []
 }
 
-/** Фото оборудования по equipment_id (из equipment_list[].images) */
+const formatVideoLink = (text: string) => {
+  if (!text) return ''
+  const urlRegex = /(https?:\/\/[^\s]+)/g
+  return text.replace(urlRegex, (url) => `<a href="${url}" target="_blank" class="clickable-link">${url}</a>`)
+}
+
 const getImages = (equipmentId: number): { name: string; url: string }[] => {
   const item = items.value.find((i: any) => i.equipment_id === equipmentId)
   return (item?.images && Array.isArray(item.images)) ? item.images : []
 }
 
-/**
- * Равномерное распределение фото по строкам третьего столбца.
- * Возвращает для данной строки ячейку с rowspan и фото, если в этой строке начинается новая ячейка; иначе null.
- */
 interface ImageCellInfo {
   attrs: { rowspan: number }
   photo: { name: string; url: string }
@@ -84,7 +99,6 @@ const getImageCellAt = (equipmentId: number, rowIndex: number): ImageCellInfo | 
   if (totalRows === 0) return null
 
   if (images.length === 0) {
-    // Одна пустая ячейка на всю высоту — показываем только в первой строке
     return rowIndex === 0 ? { attrs: { rowspan: totalRows }, photo: { name: '', url: '' } } : null
   }
 
@@ -110,32 +124,36 @@ const handleImageError = (e: Event) => {
 
 <style scoped>
 .proposal-specs-container {
-  font-family: Arial, sans-serif;
-  font-size: 10pt;
+  font-family: 'Times New Roman', Times, serif;
+  font-size: 13.3px; /* 10pt */
+}
+.clickable-link {
+  color: blue;
+  text-decoration: underline;
+  word-break: break-all;
 }
 .spec-block {
-  margin-bottom: 25px;
-  page-break-inside: avoid;
+  margin-bottom: 20px;
 }
 h3 {
-  margin-bottom: 10px;
-  font-size: 1.1em;
-  color: #000;
+  margin-bottom: 5px;
+  font-size: 10pt;
+  font-weight: bold;
+  border-bottom: 1px solid #eee;
 }
 .specs-table {
   width: 100%;
   border-collapse: collapse;
-  margin-bottom: 15px;
+  margin-bottom: 10px;
   table-layout: fixed;
 }
 .specs-table th,
 .specs-table td {
-  border: 1px solid #ddd;
-  padding: 6px;
+  border: 1px solid #333;
+  padding: 4px;
   text-align: left;
   vertical-align: top;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  font-size: 10pt;
 }
 .specs-table th {
   background-color: #f9f9f9;
@@ -145,6 +163,9 @@ h3 {
 }
 .col-value {
   width: 20%;
+}
+.col-combined {
+  width: 55%; /* Sum of 35% and 20% */
 }
 .col-image {
   width: 45%;
@@ -158,22 +179,16 @@ h3 {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  min-height: 60px;
-  padding: 4px;
+  padding: 2px;
 }
 .spec-photo {
-  width: 95%;
+  max-width: 95%;
   height: auto;
   object-fit: contain;
-  display: block;
 }
 .spec-photo-caption {
   margin-top: 4px;
   font-size: 8pt;
   color: #666;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 100%;
 }
 </style>

@@ -80,9 +80,9 @@
             {{ row.client?.client_name || '-' }}
           </template>
         </el-table-column>
-        <el-table-column label="Компания" width="200">
+        <el-table-column label="Автор (обновил)" width="150" sortable>
           <template #default="{ row }">
-            {{ row.client?.client_company_name || '-' }}
+             {{ row.updated_by?.user_name || row.user?.user_name || '-' }}
           </template>
         </el-table-column>
         <el-table-column prop="proposal_date" label="Дата КП" width="120" sortable>
@@ -108,9 +108,9 @@
           </template>
         </el-table-column>
         
-        <el-table-column label="Автор (обновил)" width="150" sortable>
+        <el-table-column label="Компания" width="200">
           <template #default="{ row }">
-             {{ row.updated_by?.user_name || row.user?.user_name || '-' }}
+            {{ row.client?.client_company_name || '-' }}
           </template>
         </el-table-column>
         <el-table-column prop="updated_at" label="Обновлено" width="180" sortable>
@@ -891,6 +891,19 @@
       >
         <el-table-column prop="equipment_name" label="Название" min-width="200" />
         <el-table-column prop="equipment_articule" label="Артикул" width="120" />
+        <el-table-column label="Производитель" width="150">
+          <template #default="{ row }">
+            <el-tag
+              v-for="manId in row.manufacturers"
+              :key="manId"
+              size="small"
+              type="success"
+              style="margin-right: 5px"
+            >
+              {{ getManufacturerName(manId) }}
+            </el-tag>
+          </template>
+        </el-table-column>
         <el-table-column label="Цена продажи (KZT)" width="150">
           <template #default="{ row }">
             <span v-if="row.sale_price_kzt !== undefined && row.sale_price_kzt !== null && row.sale_price_kzt !== ''">
@@ -1042,7 +1055,7 @@ import { exchangeRatesAPI } from '@/api/exchangeRates'
 import { equipmentListItemsAPI } from '@/api/proposals'
 import { clientsAPI, type Client } from '@/api/clients'
 import { dealsAPI, type CrmDeal } from '@/api/deals'
-import { equipmentAPI, type Equipment } from '@/api/equipment'
+import { equipmentAPI, type Equipment, manufacturersAPI, type Manufacturer } from '@/api/equipment'
 import BitrixSearchModal from '@/components/BitrixSearchModal.vue'
 import { formatPrice } from '@/utils/formatters'
 import { getImageSrc } from '@/utils/imageProxy'
@@ -1125,6 +1138,7 @@ const filters = reactive({ client_id: null, proposal_status: null })
 const includeInactive = ref(false)
 
 const clients = ref<Client[]>([])
+const manufacturers = ref<Manufacturer[]>([])
 const deals = ref<CrmDeal[]>([])
 const additionalPrices = ref<AdditionalPrice[]>([])
 const liveRates = ref<any[]>([]) // Store live rates from API
@@ -1256,6 +1270,11 @@ const equipmentSearchTotal = ref(0)
 const equipmentSearchPageSize = ref(20)
 let equipmentSearchTimeout: ReturnType<typeof setTimeout> | null = null
 
+const getManufacturerName = computed(() => (id: number) => {
+    const man = manufacturers.value.find(m => m.manufacturer_id === id)
+    return man?.manufacturer_name || `ID: ${id}`
+})
+
 const fetchEquipmentSearch = async (page: number = 1) => {
     equipmentSearchLoading.value = true
     try {
@@ -1386,6 +1405,13 @@ const loadData = async () => {
         
         const addPriceRes = await additionalPricesAPI.getAdditionalPrices()
         additionalPrices.value = addPriceRes
+
+        try {
+            manufacturers.value = await manufacturersAPI.getManufacturers()
+        } catch (e) {
+            console.error('Failed to load manufacturers:', e)
+            manufacturers.value = []
+        }
     } catch (e) {
         console.error(e)
     } finally {

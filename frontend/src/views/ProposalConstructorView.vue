@@ -235,14 +235,10 @@
                           </div>
                           <!-- Else render Editable Text Area -->
                           <div v-else-if="block.content !== undefined">
-                              <!-- Simple textarea with auto-grow replacement or contenteditable -->
-                               <div 
-                                  class="editable-text"
-                                  contenteditable="true"
-                                  @input="updateBlockContent(index, $event)"
-                               >
-                                  {{ block.content }}
-                               </div>
+                              <RichTextEditor 
+                                v-model="block.content" 
+                                @blur="debouncedSave" 
+                              />
                                <!-- Helper buttons to insert placeholders -->
                                <div class="text-controls" v-if="!block.content || block.content === '' || block.content === 'Текст...'" >
                                   <el-tag 
@@ -324,11 +320,8 @@
              <el-input v-model="newTemplate.title" placeholder="Пример: Гарантийные обязательства" />
           </el-form-item>
           <el-form-item label="Текст раздела">
-             <el-input 
+             <RichTextEditor 
                v-model="newTemplate.text" 
-               type="textarea" 
-               :rows="5" 
-               placeholder="Введите текст раздела..." 
              />
           </el-form-item>
        </el-form>
@@ -383,6 +376,7 @@ const ProposalTechProcess = defineAsyncComponent(() => import('@/components/cons
 const ProposalTotalTable = defineAsyncComponent(() => import('@/components/constructor/ProposalTotalTable.vue'))
 const AdditionalServicesTable = defineAsyncComponent(() => import('@/components/constructor/AdditionalServicesTable.vue'))
 const ProposalPhotoGrid = defineAsyncComponent(() => import('@/components/constructor/ProposalPhotoGrid.vue'))
+const RichTextEditor = defineAsyncComponent(() => import('@/components/constructor/RichTextEditor.vue'))
 
 // --- State ---
 const proposals = ref([])
@@ -666,7 +660,7 @@ const insertSelectedTemplate = () => {
     // Add new block with template content
     templateBlocks.value.push({
         title: templateToInsert.value.title,
-        content: (templateToInsert.value.text || '').replace(/\r\n/g, '\n')
+        content: templateToInsert.value.text || ''
     })
     
     selectTemplateVisible.value = false
@@ -1174,6 +1168,8 @@ onMounted(async () => {
     box-sizing: border-box;
     display: flex;
     flex-direction: column;
+    font-family: 'Times New Roman', Times, serif;
+    font-size: 16px; /* 12pt */
     color: #000; /* Ensure black text */
     position: relative;
     /* Visual Page Dividers */
@@ -1284,7 +1280,8 @@ onMounted(async () => {
     min-height: 50px;
     outline: none;
     padding: 8px;
-    font-size: 11pt; /* Document font size */
+    font-family: 'Times New Roman', Times, serif;
+    font-size: 16px; /* 12pt */
     line-height: 1.5;
     border-radius: 4px;
     white-space: pre-wrap;

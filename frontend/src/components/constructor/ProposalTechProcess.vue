@@ -35,8 +35,8 @@ const getTech = (id: number) => {
 
 <style scoped>
 .proposal-tech-container {
-  font-family: Arial, sans-serif;
-  font-size: 10pt;
+  font-family: 'Times New Roman', Times, serif;
+  font-size: 16px; /* 12pt */
 }
 .tech-block {
   margin-bottom: 20px;

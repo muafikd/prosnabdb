@@ -49,33 +49,20 @@ const formattedTotal = computed(() => formatPrice(total.value, ''))
 
 <style scoped>
 .proposal-total-container {
-  margin-top: 20px;
+  margin-top: 15px;
   text-align: right;
+  font-family: 'Times New Roman', Times, serif;
+  font-size: 13.3px; /* 10pt */
 }
 .total-box {
   display: inline-block;
-  padding: 10px 20px;
-  background-color: #f5f7fa;
-  border-radius: 4px;
-  border: 1px solid #e4e7ed;
+  padding: 5px 0;
+  border-top: 2px solid #333;
 }
 h3 {
   margin: 0;
-  font-size: 1.2em;
+  font-size: 10pt;
+  font-weight: bold;
   color: #000;
-}
-.service-row {
-    display: flex;
-    justify-content: space-between;
-    margin-bottom: 5px;
-    font-size: 0.9em;
-    color: #606266;
-    border-bottom: 1px dashed #e4e7ed;
-    padding-bottom: 2px;
-}
-.total-row {
-    margin-top: 10px;
-    border-top: 2px solid #000;
-    padding-top: 5px;
 }
 </style>
