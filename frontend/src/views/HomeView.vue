@@ -122,9 +122,30 @@
             </template>
           </el-upload>
         </div>
+
+        <el-divider />
+
+        <div class="header-info-section">
+          <p class="section-label">Реквизиты компании для шапки (Казахский):</p>
+          <el-input
+            v-model="headerKzInfo"
+            type="textarea"
+            :rows="4"
+            placeholder="Введите адрес, БИН, ИИК на казахском..."
+          />
+          
+          <p class="section-label" style="margin-top: 15px;">Реквизиты компании для шапки (Русский):</p>
+          <el-input
+            v-model="headerRuInfo"
+            type="textarea"
+            :rows="4"
+            placeholder="Введите адрес, БИН, ИИК на русском..."
+          />
+        </div>
       </div>
       <template #footer>
-        <el-button @click="logoDialogOpen = false">Закрыть</el-button>
+        <el-button @click="logoDialogOpen = false">Отмена</el-button>
+        <el-button type="primary" :loading="savingHeader" @click="saveHeaderInfo">Сохранить реквизиты</el-button>
       </template>
     </el-dialog>
   </div>
@@ -163,6 +184,10 @@ const satuChecking = ref(false)
 const satuCheckMessage = ref('')
 const satuCheckSuccess = ref(false)
 
+const headerKzInfo = ref('')
+const headerRuInfo = ref('')
+const savingHeader = ref(false)
+
 const fetchLogo = async () => {
   try {
     const token = Cookies.get('access_token')
@@ -200,6 +225,8 @@ const loadSystemSettings = async () => {
     const data = await bitrixAPI.getSystemSettings()
     bitrixWebhookUrl.value = data.bitrix_webhook_url || ''
     satuApiToken.value = data.satu_api_token || ''
+    headerKzInfo.value = data.header_kz_info || ''
+    headerRuInfo.value = data.header_ru_info || ''
   } catch (e) {
     console.error('Failed to load system settings:', e)
   }
@@ -246,6 +273,21 @@ const saveSatuTokenAndCheck = async () => {
     satuCheckMessage.value = e.response?.data?.error || e.message || 'Ошибка при сохранении токена'
   } finally {
     satuChecking.value = false
+  }
+}
+
+const saveHeaderInfo = async () => {
+  savingHeader.value = true
+  try {
+    await bitrixAPI.updateSystemSettings({
+      header_kz_info: headerKzInfo.value,
+      header_ru_info: headerRuInfo.value
+    })
+    ElMessage.success('Реквизиты успешно сохранены')
+  } catch (e) {
+    ElMessage.error('Ошибка при сохранении реквизитов')
+  } finally {
+    savingHeader.value = false
   }
 }
 

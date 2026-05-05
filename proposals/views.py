@@ -3008,6 +3008,8 @@ class SystemSettingsView(APIView):
         return Response({
             'bitrix_webhook_url': settings.bitrix_webhook_url or '',
             'satu_api_token': settings.satu_api_token or '',
+            'header_kz_info': settings.header_kz_info or '',
+            'header_ru_info': settings.header_ru_info or '',
         }, status=status.HTTP_200_OK)
 
     def patch(self, request, *args, **kwargs):
@@ -3015,6 +3017,7 @@ class SystemSettingsView(APIView):
         if not can_edit:
             return Response({'detail': 'Только суперпользователь или администратор может изменять настройки.'}, status=status.HTTP_403_FORBIDDEN)
         settings = SystemSettings.get_settings()
+        
         url = request.data.get('bitrix_webhook_url')
         if url is not None:
             settings.bitrix_webhook_url = (url or '').strip() or None
@@ -3023,10 +3026,20 @@ class SystemSettingsView(APIView):
         if satu_token is not None:
             settings.satu_api_token = (satu_token or '').strip() or None
             
+        kz_info = request.data.get('header_kz_info')
+        if kz_info is not None:
+            settings.header_kz_info = kz_info
+            
+        ru_info = request.data.get('header_ru_info')
+        if ru_info is not None:
+            settings.header_ru_info = ru_info
+            
         settings.save()
         return Response({
             'bitrix_webhook_url': settings.bitrix_webhook_url or '',
             'satu_api_token': settings.satu_api_token or '',
+            'header_kz_info': settings.header_kz_info or '',
+            'header_ru_info': settings.header_ru_info or '',
         }, status=status.HTTP_200_OK)
 
 
