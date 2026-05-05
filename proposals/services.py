@@ -1572,9 +1572,9 @@ class ExportService:
             from .models import SystemSettings
             sys_settings = SystemSettings.get_settings()
             if not self.header_data.get('kz_info'):
-                self.header_data['kz_info'] = sys_settings.header_kz_info
+                self.header_data['kz_info'] = getattr(sys_settings, 'header_kz_info', '')
             if not self.header_data.get('ru_info'):
-                self.header_data['ru_info'] = sys_settings.header_ru_info
+                self.header_data['ru_info'] = getattr(sys_settings, 'header_ru_info', '')
 
     def generate_pdf_html(self):
         """Builds HTML for PDF generation using layout_data and data_pkg."""
