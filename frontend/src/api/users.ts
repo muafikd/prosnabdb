@@ -1,7 +1,7 @@
 import apiClient from './axios'
 import type { AxiosResponse } from 'axios'
 
-export type UserRole = 'Администратор' | 'Менеджер' | 'Просмотр'
+export type UserRole = 'Администратор' | 'Менеджер' | 'Младший менеджер' | 'Просмотр'
 
 export interface User {
   user_id: number

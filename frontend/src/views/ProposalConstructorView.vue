@@ -343,8 +343,9 @@
       align-center
     >
       <el-table :data="sectionTemplates" border highlight-current-row @current-change="handleTemplateSelection" style="cursor: pointer">
+         <el-table-column prop="name" label="Техническое название раздела" width="180" />
          <el-table-column prop="title" label="Заголовок" />
-         <el-table-column prop="text" label="Текст (превью)" width="300" show-overflow-tooltip />
+         <el-table-column prop="text" label="Текст (превью)" width="200" show-overflow-tooltip />
       </el-table>
       <template #footer>
          <div class="dialog-footer">

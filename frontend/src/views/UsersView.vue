@@ -40,6 +40,7 @@
             >
               <el-option label="Администратор" value="Администратор" />
               <el-option label="Менеджер" value="Менеджер" />
+              <el-option label="Младший менеджер" value="Младший менеджер" />
               <el-option label="Просмотр" value="Просмотр" />
             </el-select>
           </template>

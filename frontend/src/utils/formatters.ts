@@ -7,9 +7,9 @@ export const formatPrice = (value: number | string | undefined | null, currency:
     // toFixed(2) gives "15000.00"
     // split('.') gives ["15000", "00"]
     // replace regex adds spaces to the first part
-    const parts = num.toFixed(2).split('.')
+    const parts = Math.round(num).toString().split('.')
     parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ' ')
-    const formatted = parts.join('.')
+    const formatted = parts[0]
 
     return currency ? `${formatted} ${currency}` : formatted
 }

@@ -5,7 +5,8 @@ from .models import (
     EquipmentSpecification, EquipmentTechProcess, Equipment, PurchasePrice,
     Logistics, EquipmentDocument, EquipmentLine, EquipmentLineItem, AdditionalPrices,
     EquipmentList, EquipmentListLineItem, EquipmentListItem, PaymentLog, CrmDeal,
-    CommercialProposal, ExchangeRate, CostCalculation, ProposalTemplate, SectionTemplate
+    CommercialProposal, ExchangeRate, CostCalculation, ProposalTemplate, SectionTemplate,
+    ProposalAdjustment
 )
 from django.conf import settings
 from .services import LinkConverterService, CloudImageImportService
@@ -408,8 +409,16 @@ class EquipmentSerializer(serializers.ModelSerializer):
         """
         Return equipment_imagelinks from local EquipmentPhoto first, then legacy JSONB.
         Local URLs (/media/photos/...) are stable for constructor and PDF.
+        Hides purchase price for Junior Managers.
         """
         data = super().to_representation(instance)
+        
+        # Hide purchase prices for Junior Manager
+        request = self.context.get('request')
+        if request and request.user and request.user.is_authenticated:
+            if request.user.user_role == 'Младший менеджер':
+                data.pop('equipment_manufacture_price', None)
+                
         data['equipment_imagelinks'] = self._build_equipment_imagelinks_response(instance)
         return data
     
@@ -669,6 +678,22 @@ class EquipmentListItemSerializer(serializers.ModelSerializer):
             'price_per_unit', 'total_price', 'calculated_data', 'created_at'
         ]
         read_only_fields = ['created_at']
+        
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        request = self.context.get('request')
+        if request and request.user and request.user.is_authenticated:
+            if request.user.user_role == 'Младший менеджер':
+                # Hide cost-related info from calculated_data
+                if 'calculated_data' in data and isinstance(data['calculated_data'], dict):
+                    cd = data['calculated_data']
+                    cd.pop('purchase_price_kzt', None)
+                    cd.pop('purchase_price_original', None)
+                    cd.pop('base_cost_kzt', None)
+                    cd.pop('margin_kzt', None)
+                    cd.pop('margin_percentage', None)
+        return data
+
 
 
 class EquipmentListSerializer(serializers.ModelSerializer):
@@ -738,6 +763,19 @@ class EquipmentListSerializer(serializers.ModelSerializer):
         return EquipmentListItemSerializer(equipment_items, many=True).data
 
 
+class ProposalAdjustmentSerializer(serializers.ModelSerializer):
+    """Serializer for ProposalAdjustment model."""
+    author_name = serializers.CharField(source='created_by.user_name', read_only=True)
+    
+    class Meta:
+        model = ProposalAdjustment
+        fields = [
+            'id', 'proposal', 'adjustment_type', 'value_percentage',
+            'comments', 'created_by', 'author_name', 'created_at'
+        ]
+        read_only_fields = ['id', 'created_by', 'author_name', 'created_at']
+
+
 class PaymentLogSerializer(serializers.ModelSerializer):
     """Serializer for PaymentLog model."""
     
@@ -764,6 +802,7 @@ class CommercialProposalSerializer(serializers.ModelSerializer):
     parent_proposal = serializers.SerializerMethodField()
     payment_logs = PaymentLogSerializer(many=True, required=False)
     equipment_lists = EquipmentListSerializer(many=True, read_only=True)
+    adjustments = ProposalAdjustmentSerializer(many=True, required=False)
     
     # Primary key fields for write operations
     client_id = serializers.PrimaryKeyRelatedField(
@@ -840,9 +879,34 @@ class CommercialProposalSerializer(serializers.ModelSerializer):
             'payment_logs', 'payment_log_ids',
             'equipment_lists', 'equipment_items', 'equipment_list',
             'additional_price_ids', 'internal_exchange_rates', 'additional_services',
+            'adjustments',
             'data_package', 'created_at', 'updated_at', 'updated_by', 'template_status'
         ]
         read_only_fields = ['proposal_id', 'created_at', 'updated_at', 'updated_by', 'data_package']
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        request = self.context.get('request')
+        if request and request.user and request.user.is_authenticated:
+            if request.user.user_role == 'Младший менеджер':
+                data.pop('cost_price', None)
+                data.pop('margin_percentage', None)
+                data.pop('margin_value', None)
+                # Filter data_package if it exists
+                if 'data_package' in data and data['data_package']:
+                    dp = data['data_package']
+                    dp.pop('total_cost_price', None)
+                    dp.pop('total_margin_value', None)
+                    dp.pop('total_margin_percentage', None)
+                    # Also items costs
+                    if 'equipment_list' in dp and isinstance(dp['equipment_list'], list):
+                        for item in dp['equipment_list']:
+                            item.pop('purchase_price_kzt', None)
+                            item.pop('purchase_price_original', None)
+                            item.pop('base_cost_kzt', None)
+                            item.pop('margin_kzt', None)
+                            item.pop('margin_percentage', None)
+        return data
     
     def get_data_package(self, obj):
         """Return data_package if exists, otherwise return None (will be generated on demand)."""
@@ -877,6 +941,7 @@ class CommercialProposalSerializer(serializers.ModelSerializer):
         additional_price_ids = validated_data.pop('additional_price_ids', [])
         equipment_items_data = validated_data.pop('equipment_items', [])  # Данные об оборудовании
         equipment_list_data = validated_data.pop('equipment_list', {})  # Данные для EquipmentList (налоги, доставка и т.д.)
+        adjustments_data = validated_data.pop('adjustments', [])
         
         if 'proposal_version' not in validated_data:
             validated_data['proposal_version'] = 1
@@ -911,6 +976,19 @@ class CommercialProposalSerializer(serializers.ModelSerializer):
                             payment = PaymentLog.objects.create(**payment_data)
                         
                         proposal.payment_logs.add(payment)
+                
+                # Создаем надбавки/скидки
+                if adjustments_data:
+                    current_user = self.context['request'].user if 'request' in self.context else None
+                    for adj_data in adjustments_data:
+                        # Удаляем поля, которые проставляются автоматически или могут вызвать конфликт
+                        adj_data.pop('id', None)
+                        adj_data.pop('proposal', None)
+                        adj_data.pop('created_by', None)
+                        adj_data.pop('author_name', None)
+                        if current_user:
+                            adj_data['created_by'] = current_user
+                        ProposalAdjustment.objects.create(proposal=proposal, **adj_data)
                 
                 # Создаем EquipmentList (всегда создаем один основной список для КП)
                 # Даже если нет оборудования, список нужен для хранения общих расходов
@@ -994,6 +1072,7 @@ class CommercialProposalSerializer(serializers.ModelSerializer):
         additional_price_ids = validated_data.pop('additional_price_ids', None)
         equipment_items_data = validated_data.pop('equipment_items', None)
         equipment_list_data = validated_data.pop('equipment_list', None)
+        adjustments_data = validated_data.pop('adjustments', None)
         
         with transaction.atomic():
             # Update all fields with proper Decimal handling
@@ -1105,6 +1184,37 @@ class CommercialProposalSerializer(serializers.ModelSerializer):
                 
                 instance.payment_logs.set(new_payment_ids)
             
+            # Обработка надбавок/скидок (синхронизация)
+            if adjustments_data is not None:
+                current_user = self.context['request'].user if 'request' in self.context else None
+                incoming_ids = []
+                for adj_item in adjustments_data:
+                    adj_id = adj_item.get('id')
+                    if adj_id:
+                        # Обновляем существующую (только комментарии и значение, тип обычно не меняют но можно)
+                        try:
+                            adj_obj = instance.adjustments.get(pk=adj_id)
+                            adj_obj.adjustment_type = adj_item.get('adjustment_type', adj_obj.adjustment_type)
+                            adj_obj.value_percentage = adj_item.get('value_percentage', adj_obj.value_percentage)
+                            adj_obj.comments = adj_item.get('comments', adj_obj.comments)
+                            adj_obj.save()
+                            incoming_ids.append(adj_obj.id)
+                        except ProposalAdjustment.DoesNotExist:
+                            pass
+                    else:
+                        # Создаем новую
+                        adj_item.pop('id', None)
+                        adj_item.pop('proposal', None)
+                        adj_item.pop('created_by', None)
+                        adj_item.pop('author_name', None)
+                        if current_user:
+                            adj_item['created_by'] = current_user
+                        new_adj = ProposalAdjustment.objects.create(proposal=instance, **adj_item)
+                        incoming_ids.append(new_adj.id)
+                
+                # Удаляем те, которых нет в списке
+                instance.adjustments.exclude(id__in=incoming_ids).delete()
+
             # Logic for EquipmentList update:
             # We assume there is only one EquipmentList per Proposal.
             # If it exists, update it. If not, create it.

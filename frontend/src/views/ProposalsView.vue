@@ -130,6 +130,7 @@
               title="Создать копию"
             />
             <el-button
+              v-if="canEdit(row)"
               type="warning"
               size="small"
               :icon="DataBoard"
@@ -143,9 +144,10 @@
               :icon="Edit"
               @click="handleEdit(row)"
               circle
-              title="Редактировать"
+              :title="canEdit(row) ? 'Редактировать' : 'Просмотр'"
             />
             <el-button
+              v-if="canDelete(row)"
               type="danger"
               size="small"
               :icon="Delete"
@@ -334,6 +336,28 @@
             <el-form-item label="Ссылка на Битрикс" prop="bitrix_lead_link">
               <el-input v-model="formData.bitrix_lead_link" placeholder="https://..." />
             </el-form-item>
+
+            <el-divider content-position="left">Валюта коммерческого предложения</el-divider>
+            
+            <el-row :gutter="20">
+              <el-col :span="12">
+                <el-form-item label="Валюта КП *" prop="currency_ticket">
+                  <el-select v-model="formData.currency_ticket" placeholder="Выберите валюту КП" style="width: 100%" @change="handleCurrencyTicketChange">
+                    <el-option label="KZT (Тенге)" value="KZT" />
+                    <el-option label="USD (Доллар США)" value="USD" />
+                    <el-option label="EUR (Евро)" value="EUR" />
+                    <el-option label="RUB (Российский рубль)" value="RUB" />
+                    <el-option label="CNY (Китайский юань)" value="CNY" />
+                  </el-select>
+                </el-form-item>
+              </el-col>
+              <el-col :span="12">
+                <div style="font-size: 0.85em; color: #909399; line-height: 1.5; padding-top: 5px;">
+                  Цены на оборудование будут сконвертированы из тенге в выбранную валюту КП при генерации печатной формы и в конструкторе. Внутренний курс для конвертации настраивается во вкладке "Курс валют".
+                </div>
+              </el-col>
+            </el-row>
+
           </el-form>
         </el-tab-pane>
 
@@ -383,7 +407,7 @@
               </template>
             </el-table-column>
             <el-table-column prop="equipment_name" label="Оборудование" min-width="200" />
-            <el-table-column label="Цена (З) валюта" width="130">
+            <el-table-column v-if="!authStore.isJuniorManager" label="Цена (З) валюта" width="130">
               <template #default="{ row }">
                 <span v-if="row.purchase_price_original && row.purchase_price_currency">
                   {{ formatPrice(row.purchase_price_original, row.purchase_price_currency) }}
@@ -393,7 +417,7 @@
                 </span>
               </template>
             </el-table-column>
-            <el-table-column label="Цена (З) KZT" width="130">
+            <el-table-column v-if="!authStore.isJuniorManager" label="Цена (З) KZT" width="130">
               <template #default="{ row }">
                 <!-- Always calculate dynamically using internal rate from "Курс валют" tab -->
                 {{ formatPrice(calculatePurchasePriceKZT(row), 'KZT') }}
@@ -402,7 +426,7 @@
             <el-table-column label="Цена продажи KZT" width="140">
               <template #default="{ row }">
                 <span v-if="row.sale_price_kzt !== undefined && row.sale_price_kzt !== null">
-                  {{ formatPrice(row.sale_price_kzt, 'KZT') }}
+                  {{ formatPrice(Math.round(row.sale_price_kzt * (1 + netAdjustmentPercentage / 100)), 'KZT') }}
                 </span>
                 <span v-else style="color: #999;">—</span>
               </template>
@@ -418,7 +442,7 @@
                 />
               </template>
             </el-table-column>
-            <el-table-column label="Размер маржи %" width="130">
+            <el-table-column v-if="!authStore.isJuniorManager" label="Размер маржи %" width="130">
               <template #default="{ row }">
                 <span v-if="row.margin_percentage !== undefined">
                   {{ formatPrice(row.margin_percentage, 'KZT') }}%
@@ -429,7 +453,7 @@
                 <span v-else style="color: #999;">—</span>
               </template>
             </el-table-column>
-            <el-table-column label="Размер маржи (KZT)" width="150">
+            <el-table-column v-if="!authStore.isJuniorManager" label="Размер маржи (KZT)" width="150">
               <template #default="{ row }">
                 <span v-if="row.margin_kzt !== undefined">
                   {{ formatPrice(row.margin_kzt, 'KZT') }}
@@ -440,7 +464,7 @@
                 <span v-else style="color: #999;">—</span>
               </template>
             </el-table-column>
-            <el-table-column label="Сумма расходов (KZT)" width="150">
+            <el-table-column v-if="!authStore.isJuniorManager" label="Сумма расходов (KZT)" width="150">
               <template #default="{ row }">
                 {{ formatPrice(calculateTotalExpensesKZT(row), 'KZT') }}
               </template>
@@ -502,17 +526,12 @@
         <el-tab-pane label="Курс валют" name="exchange_rates">
           <div class="section-header">
              <h3>Внутренние курсы (для расчета себестоимости)</h3>
-             <!-- Кнопка скрыта, т.к. валюты добавляются автоматически по оборудованию -->
-             <!-- <el-button size="small" @click="showAddCurrencyDialog = true">
+             <el-button size="small" type="primary" plain @click="showAddCurrencyDialog = true">
                <el-icon><Plus /></el-icon> Добавить валюту
-             </el-button> -->
-          </div>
-          
-          <div v-if="displayedExchangeRates.length === 0" class="text-gray-500 my-4">
-             Нет валютного оборудования. Добавьте оборудование с ценой в валюте.
+             </el-button>
           </div>
 
-          <el-table v-else :data="displayedExchangeRates" border style="width: 100%; margin-top: 20px">
+          <el-table :data="displayedExchangeRates" border style="width: 100%; margin-top: 20px" empty-text="Нет добавленных валют. Нажмите 'Добавить валюту'.">
              <el-table-column prop="currency" label="Валюта" width="80" />
              <el-table-column label="Текущий курс НБ" width="120">
                <template #default="{ row }">
@@ -551,8 +570,50 @@
              </el-table-column>
           </el-table>
         </el-tab-pane>
+        
+        <!-- 4. Надбавки/Скидки -->
+        <el-tab-pane label="Надбавки/Скидки" name="adjustments">
+          <div class="section-header">
+            <h3>Надбавки и скидки КП</h3>
+            <el-button type="primary" size="small" @click="openAdjustmentDialog">
+              <el-icon><Plus /></el-icon>
+              Добавить надбавку/скидку
+            </el-button>
+          </div>
 
-        <!-- 4. Итоговый расчет КП -->
+          <el-table :data="formData.adjustments" border style="width: 100%; margin-top: 20px">
+            <el-table-column prop="created_at" label="Дата" width="160">
+              <template #default="{ row }">
+                {{ row.created_at ? formatDate(row.created_at) : 'Новая' }}
+              </template>
+            </el-table-column>
+            <el-table-column prop="author_name" label="Автор" width="150">
+              <template #default="{ row }">
+                {{ row.author_name || 'Вы' }}
+              </template>
+            </el-table-column>
+            <el-table-column prop="adjustment_type" label="Тип" width="120">
+              <template #default="{ row }">
+                <el-tag :type="row.adjustment_type === 'markup' ? 'success' : 'warning'">
+                  {{ row.adjustment_type === 'markup' ? 'Надбавка' : 'Скидка' }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column prop="value_percentage" label="Размер (%)" width="120">
+              <template #default="{ row }">
+                {{ row.value_percentage }}%
+              </template>
+            </el-table-column>
+            <el-table-column prop="comments" label="Комментарий" />
+            <el-table-column label="Действия" width="100" align="center">
+              <template #default="{ $index }">
+                <el-button type="danger" :icon="Delete" size="small" circle @click="removeAdjustment($index)" />
+              </template>
+            </el-table-column>
+          </el-table>
+        </el-tab-pane>
+
+        <!-- 5. Итоговый расчет КП -->
         <el-tab-pane label="Итоговый расчет КП" name="calculation">
            <!-- Секция 1: Настройка доп. расходов в рамках КП -->
            <div class="calculation-section">
@@ -617,55 +678,81 @@
            <div class="calculation-section">
              <h3>2. Калькуляция</h3>
              
-             <!-- Инфо-табло внутренних курсов -->
-             <div class="rates-summary">
-                <span class="label">Примененные курсы:</span>
-                <el-tag v-for="rate in internalExchangeRates" :key="rate.currency" class="mx-1" type="warning" effect="plain">
-                  1 {{ rate.currency }} = {{ rate.internal_rate }} KZT
-                </el-tag>
-             </div>
-
              <div class="calculation-summary-container">
-               <el-card shadow="never" class="summary-card">
-                  <div class="summary-row">
-                    <span>Стоимость оборудования (в тенге):</span>
-                    <span>{{ formatPrice(totalEquipmentCostKZT, 'KZT') }}</span>
-                  </div>
-                  <div class="summary-row" v-if="totalGlobalExpensesKZT > 0">
-                    <span>Общие расходы КП (в тенге):</span>
-                    <span>+ {{ formatPrice(totalGlobalExpensesKZT, 'KZT') }}</span>
-                  </div>
-                  <el-divider style="margin: 12px 0"/>
-                  <div class="summary-row">
-                    <strong>Себестоимость итого (KZT):</strong>
-                    <strong>{{ formatPrice(netCostKZT, 'KZT') }}</strong>
-                  </div>
-               </el-card>
-
-               <div class="margin-block">
-                 <h4>Маржа (автоматический расчет)</h4>
-                 <div style="margin-bottom: 15px;">
+                <!-- KZT Column -->
+                <el-card shadow="never" class="summary-card">
+                   <template #header><strong>Расчет в KZT</strong></template>
                    <div class="summary-row">
-                     <span>Итоговая маржа (KZT):</span>
-                     <strong>{{ formatPrice(totalMarginKZT, 'KZT') }}</strong>
+                     <span>Оборудование (базовая цена):</span>
+                     <span>{{ formatPrice(totalRawEquipmentPriceKZT, 'KZT') }}</span>
                    </div>
-                   <div class="summary-row" style="margin-top: 10px;">
-                     <span>Итоговая маржа (%):</span>
-                     <strong>{{ formatPrice(totalMarginPercentage, 'KZT') }}%</strong>
+                   <div class="summary-row" v-if="totalAdjustmentAmountKZT !== 0">
+                     <span>{{ netAdjustmentPercentage >= 0 ? 'Надбавка' : 'Скидка' }} ({{ Math.abs(netAdjustmentPercentage) }}%):</span>
+                     <span :style="{ color: netAdjustmentPercentage >= 0 ? '#67C23A' : '#E6A23C' }">
+                       {{ netAdjustmentPercentage >= 0 ? '+' : '-' }} {{ formatPrice(Math.abs(totalAdjustmentAmountKZT), 'KZT') }}
+                     </span>
                    </div>
-                 </div>
+                   <div class="summary-row" v-if="totalAdditionalServicesKZT > 0">
+                     <span>Доп. услуги:</span>
+                     <span>+ {{ formatPrice(totalAdditionalServicesKZT, 'KZT') }}</span>
+                   </div>
+                   <el-divider style="margin: 12px 0"/>
+                   <div class="summary-row main-total">
+                     <strong>Итого (KZT):</strong>
+                     <strong>{{ formatPrice(calculatedTotalPriceKZT, 'KZT') }}</strong>
+                   </div>
+                </el-card>
 
-                  <div class="final-price-display">
-                    <span>Итоговая цена КП:</span>
-                    <span class="price-value">{{ formatPrice(calculatedTotalPriceKZT, 'KZT') }}</span>
+                <!-- Target Currency Column -->
+                <el-card shadow="never" class="summary-card" v-if="formData.currency_ticket !== 'KZT'">
+                   <template #header><strong>Расчет в {{ formData.currency_ticket }}</strong></template>
+                   <div class="summary-row">
+                     <span>Оборудование:</span>
+                     <span>{{ formatPrice(totalRawEquipmentPriceTarget, formData.currency_ticket) }}</span>
+                   </div>
+                   <div class="summary-row" v-if="totalAdjustmentAmountTarget !== 0">
+                     <span>{{ netAdjustmentPercentage >= 0 ? 'Надбавка' : 'Скидка' }}:</span>
+                     <span :style="{ color: netAdjustmentPercentage >= 0 ? '#67C23A' : '#E6A23C' }">
+                       {{ netAdjustmentPercentage >= 0 ? '+' : '-' }} {{ formatPrice(Math.abs(totalAdjustmentAmountTarget), formData.currency_ticket) }}
+                     </span>
+                   </div>
+                   <div class="summary-row" v-if="totalAdditionalServicesTarget > 0">
+                     <span>Доп. услуги:</span>
+                     <span>+ {{ formatPrice(totalAdditionalServicesTarget, formData.currency_ticket) }}</span>
+                   </div>
+                   <el-divider style="margin: 12px 0"/>
+                   <div class="summary-row target-total">
+                     <strong>Итого ({{ formData.currency_ticket }}):</strong>
+                     <strong>{{ formatPrice(calculatedTotalPrice, formData.currency_ticket) }}</strong>
+                   </div>
+                </el-card>
+              </div>
+
+              <!-- Маржа и доп. информация -->
+              <div v-if="!authStore.isJuniorManager" class="margin-info-section" style="margin-top: 20px;">
+                <el-card shadow="never" style="width: 100%;">
+                  <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <div class="margin-block">
+                      <h4 style="margin-top: 0;">Маржа (автоматический расчет)</h4>
+                      <div style="display: flex; gap: 40px;">
+                        <div class="summary-row">
+                          <span style="margin-right: 10px;">Итоговая маржа (KZT):</span>
+                          <strong>{{ formatPrice(totalMarginKZT, 'KZT') }}</strong>
+                        </div>
+                        <div class="summary-row">
+                          <span style="margin-right: 10px;">Итоговая маржа (%):</span>
+                          <strong>{{ formatPrice(totalMarginPercentage, 'KZT') }}%</strong>
+                        </div>
+                      </div>
+                    </div>
+                    <div style="text-align: right; font-size: 0.85em; color: #909399;">
+                      Маржа рассчитывается на основе цен продажи оборудования.<br>
+                      Все расчеты округлены до целого числа.
+                    </div>
                   </div>
-                  <div style="font-size: 0.85em; color: #909399; margin-top: 10px;">
-                    Маржа рассчитывается автоматически на основе цен продажи оборудования
-                  </div>
-               </div>
-             </div>
-           </div>
-        </el-tab-pane>
+                </el-card>
+              </div>
+           </div>        </el-tab-pane>
 
         <!-- 5. Регистрация платежей -->
         <el-tab-pane label="Регистрация платежей" name="payments">
@@ -741,7 +828,7 @@
       <template #footer>
         <span class="dialog-footer">
           <el-button @click="dialogVisible = false">Отмена</el-button>
-          <el-button type="primary" :loading="submitting" @click="handleSubmit">
+          <el-button v-if="!isEditMode || canEdit(currentProposal)" type="primary" :loading="submitting" @click="handleSubmit">
             {{ isEditMode ? 'Сохранить КП' : 'Создать КП' }}
           </el-button>
         </span>
@@ -779,7 +866,7 @@
           <el-descriptions-item label="Страна производства">
             {{ currentEquipmentCard.equipment_madein_country || '—' }}
           </el-descriptions-item>
-          <el-descriptions-item label="Цена закупки">
+          <el-descriptions-item v-if="!authStore.isJuniorManager" label="Цена закупки">
             {{ currentEquipmentCard.equipment_manufacture_price ? formatPrice(currentEquipmentCard.equipment_manufacture_price, currentEquipmentCard.equipment_price_currency_type || 'KZT') : '—' }}
           </el-descriptions-item>
           <el-descriptions-item label="Цена продажи (KZT)">
@@ -889,6 +976,22 @@
         :data="equipmentSearchResults"
         max-height="400"
       >
+        <el-table-column label="Фото" width="80" align="center">
+          <template #default="{ row }">
+            <div 
+              v-if="row.equipment_imagelinks && row.equipment_imagelinks.length > 0"
+              style="cursor: pointer; display: inline-flex; justify-content: center; align-items: center;"
+              @click="openPhotoCarousel(row)"
+            >
+              <el-image 
+                :src="row.equipment_imagelinks[0].url" 
+                style="width: 50px; height: 50px; border-radius: 4px;"
+                fit="cover"
+              />
+            </div>
+            <el-icon v-else style="color: #ccc; font-size: 40px;"><Picture /></el-icon>
+          </template>
+        </el-table-column>
         <el-table-column prop="equipment_name" label="Название" min-width="200" />
         <el-table-column prop="equipment_articule" label="Артикул" width="120" />
         <el-table-column label="Производитель" width="150">
@@ -932,6 +1035,28 @@
           layout="total, prev, pager, next"
           @current-change="handleEquipmentSearchPageChange"
         />
+      </div>
+    </el-dialog>
+
+    <!-- Модальное окно для показа фото оборудования -->
+    <el-dialog
+      v-model="showPhotoCarouselDialog"
+      :title="'Фото: ' + (selectedEquipmentForPhotos?.equipment_name || '')"
+      width="600px"
+      align-center
+    >
+      <el-carousel v-if="selectedEquipmentForPhotos?.equipment_imagelinks?.length" height="400px" indicator-position="outside">
+        <el-carousel-item v-for="(photo, idx) in selectedEquipmentForPhotos.equipment_imagelinks" :key="idx">
+          <el-image 
+            :src="photo.url" 
+            style="width: 100%; height: 100%; object-fit: contain;"
+            fit="contain"
+            :preview-src-list="[photo.url]"
+          />
+        </el-carousel-item>
+      </el-carousel>
+      <div v-else style="text-align: center; padding: 40px; color: #999;">
+        Нет доступных фотографий
       </div>
     </el-dialog>
 
@@ -1033,6 +1158,47 @@
       @select-deal="onBitrixDealSelected"
     />
 
+    <!-- Модальное окно добавления надбавки/скидки -->
+    <el-dialog
+      v-model="showAdjustmentDialog"
+      title="Добавить надбавку/скидку"
+      width="500px"
+      destroy-on-close
+    >
+      <el-form :model="adjustmentForm" label-width="120px">
+        <el-form-item label="Тип">
+          <el-radio-group v-model="adjustmentForm.adjustment_type">
+            <el-radio label="markup">Надбавка</el-radio>
+            <el-radio label="discount">Скидка</el-radio>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item label="Размер (%)">
+          <el-input-number 
+            v-model="adjustmentForm.value_percentage" 
+            :min="0.01" 
+            :max="100" 
+            :precision="2"
+            :step="1"
+            style="width: 100%"
+          />
+        </el-form-item>
+        <el-form-item label="Комментарий">
+          <el-input
+            v-model="adjustmentForm.comments"
+            type="textarea"
+            :rows="3"
+            placeholder="Причина надбавки/скидки"
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <span class="dialog-footer">
+          <el-button @click="showAdjustmentDialog = false">Отмена</el-button>
+          <el-button type="primary" @click="addAdjustment">Добавить</el-button>
+        </span>
+      </template>
+    </el-dialog>
+
   </div>
 </template>
 
@@ -1042,7 +1208,7 @@ import { useRouter, useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import axios from 'axios'
 import Cookies from 'js-cookie'
-import { Plus, Edit, Delete, Search, Coin, Setting, DocumentCopy, DataBoard, ArrowUp, ArrowDown, Refresh, View, Loading } from '@element-plus/icons-vue'
+import { Plus, Edit, Delete, Search, Coin, Setting, DocumentCopy, DataBoard, ArrowUp, ArrowDown, Refresh, View, Loading, Picture } from '@element-plus/icons-vue'
 import {
   proposalsAPI,
   type CommercialProposal,
@@ -1079,6 +1245,15 @@ interface RowExpense {
   name: string
   value: number
   formattedValue?: string
+}
+
+interface ProposalAdjustment {
+  id?: number
+  adjustment_type: 'markup' | 'discount'
+  value_percentage: number
+  comments: string
+  author_name?: string
+  created_at?: string
 }
 
 interface EquipmentRow {
@@ -1121,12 +1296,6 @@ interface AdditionalService {
   description: string
 }
 
-interface AdditionalService {
-  name: string
-  price: number
-  description: string
-}
-
 // --- State ---
 const loading = ref(false)
 const proposalsList = ref<CommercialProposal[]>([])
@@ -1155,7 +1324,24 @@ const bitrixSearchVisible = ref(false)
 const equipmentCardDialogVisible = ref(false)
 const currentEquipmentCard = ref<Equipment | null>(null)
 const loadingEquipmentCard = ref(false)
+const currentProposal = ref<any>(null)
 const authStore = useAuthStore()
+
+const canEdit = (proposal: any) => {
+  if (authStore.isAdmin || authStore.isManager) return true
+  if (authStore.isJuniorManager) {
+    return proposal.user?.user_id === authStore.user?.user_id
+  }
+  return false
+}
+
+const canDelete = (proposal: any) => {
+  if (authStore.isAdmin || authStore.isManager) return true
+  if (authStore.isJuniorManager) {
+    return proposal.user?.user_id === authStore.user?.user_id
+  }
+  return false
+}
 const router = useRouter()
 const route = useRoute()
 
@@ -1262,6 +1448,14 @@ const selectedEquipment = ref<EquipmentRow[]>([])
 const showAddEquipmentDialog = ref(false)
 const equipmentSearchQuery = ref('')
 
+const showPhotoCarouselDialog = ref(false)
+const selectedEquipmentForPhotos = ref<Equipment | null>(null)
+
+const openPhotoCarousel = (row: Equipment) => {
+    selectedEquipmentForPhotos.value = row
+    showPhotoCarouselDialog.value = true
+}
+
 // Server-side equipment search state (for "Добавить оборудование")
 const equipmentSearchResults = ref<Equipment[]>([])
 const equipmentSearchLoading = ref(false)
@@ -1347,6 +1541,51 @@ const totalPaid = computed(() => {
 const remainingBalance = computed(() => {
     const total = Number(formData.total_price || 0)
     return total - totalPaid.value
+})
+
+// Markups/Discounts State
+const showAdjustmentDialog = ref(false)
+const adjustmentForm = reactive({
+    adjustment_type: 'markup',
+    value_percentage: 0,
+    comments: ''
+})
+
+const openAdjustmentDialog = () => {
+    adjustmentForm.adjustment_type = 'markup'
+    adjustmentForm.value_percentage = 0
+    adjustmentForm.comments = ''
+    showAdjustmentDialog.value = true
+}
+
+const addAdjustment = () => {
+    if (adjustmentForm.value_percentage <= 0) {
+        ElMessage.warning('Размер должен быть больше 0')
+        return
+    }
+    
+    if (!formData.adjustments) formData.adjustments = []
+    
+    formData.adjustments.push({
+        adjustment_type: adjustmentForm.adjustment_type as any,
+        value_percentage: adjustmentForm.value_percentage,
+        comments: adjustmentForm.comments,
+        created_at: new Date().toISOString()
+    })
+    
+    showAdjustmentDialog.value = false
+}
+
+const removeAdjustment = (index: number) => {
+    formData.adjustments?.splice(index, 1)
+}
+
+const netAdjustmentPercentage = computed(() => {
+    if (!formData.adjustments || formData.adjustments.length === 0) return 0
+    return formData.adjustments.reduce((sum, adj) => {
+        const val = Number(adj.value_percentage || 0)
+        return adj.adjustment_type === 'markup' ? sum + val : sum - val
+    }, 0)
 })
 
 // Global Expenses Management
@@ -1444,6 +1683,7 @@ const handleTabChange = async (tabName: string) => {
 }
 
 const handleCreate = async () => {
+    currentProposal.value = null
     isEditMode.value = false
     activeTab.value = 'basic'
     
@@ -1466,7 +1706,8 @@ const handleCreate = async () => {
         delivery_time: '', 
         warranty: '',
         currency_ticket: 'KZT',
-        exchange_rate: '1'
+        exchange_rate: '1',
+        adjustments: []
     })
 
     // Generate unique number
@@ -1528,8 +1769,28 @@ const activeCurrencies = computed(() => {
 
 // Computed: Filtered internal rates based on active currencies
 const displayedExchangeRates = computed(() => {
-    return internalExchangeRates.value.filter(r => activeCurrencies.value.includes(r.currency))
+    return internalExchangeRates.value
 })
+
+const handleCurrencyTicketChange = (val: string) => {
+    if (val !== 'KZT' && !hasCurrency(val)) {
+        const rate = getLiveRate(val)
+        internalExchangeRates.value.push({
+            currency: val,
+            current_nb_rate: rate,
+            creation_nb_rate: rate,
+            internal_rate: rate,
+            rate_date: new Date().toISOString().split('T')[0]
+        })
+    }
+    // Update formData.exchange_rate
+    if (val === 'KZT') {
+        formData.exchange_rate = '1'
+        formData.exchange_rate_date = undefined
+    } else {
+        formData.exchange_rate = getRate(val).toString()
+    }
+}
 
 // Helper to get live rate
 const getLiveRate = (currency: string) => {
@@ -1790,6 +2051,98 @@ const calculateBaseCostKZT = (row: EquipmentRow): number => {
     return purchasePriceKZT + rowExpensesPerUnit
 }
 
+// --- Final Calculation Computed Properties ---
+
+// 1. Raw Equipment Price KZT (sum of (rounded sale_price_kzt) * quantity)
+const totalRawEquipmentPriceKZT = computed(() => {
+    return selectedEquipment.value.reduce((sum, row) => {
+        if (row.sale_price_kzt !== undefined && row.sale_price_kzt !== null) {
+            const roundedUnitPrice = Math.round(row.sale_price_kzt)
+            return sum + (roundedUnitPrice * row.quantity)
+        }
+        return sum
+    }, 0)
+})
+
+// 2. Adjusted Equipment Price KZT (sum of (rounded adjusted_unit_price) * quantity)
+const totalAdjustedEquipmentPriceKZT = computed(() => {
+    return selectedEquipment.value.reduce((sum, row) => {
+        if (row.sale_price_kzt !== undefined && row.sale_price_kzt !== null) {
+            const adjustedUnitPriceKZT = Math.round(row.sale_price_kzt * (1 + netAdjustmentPercentage.value / 100))
+            return sum + (adjustedUnitPriceKZT * row.quantity)
+        }
+        return sum
+    }, 0)
+})
+
+// 3. Adjustment Amount KZT (The difference)
+const totalAdjustmentAmountKZT = computed(() => {
+    return totalAdjustedEquipmentPriceKZT.value - totalRawEquipmentPriceKZT.value
+})
+
+// 4. Additional Services KZT
+const totalAdditionalServicesKZT = computed(() => {
+    if (!formData.additional_services) return 0
+    return formData.additional_services.reduce((sum, svc) => sum + Math.round(Number(svc.price || 0)), 0)
+})
+
+// 5. Final Grand Total KZT
+const calculatedTotalPriceKZT = computed(() => {
+    return totalAdjustedEquipmentPriceKZT.value + totalAdditionalServicesKZT.value
+})
+
+// --- Target Currency Values (calculated per-item to ensure sum of parts matches total) ---
+const targetRate = computed(() => getRate(formData.currency_ticket))
+
+const totalRawEquipmentPriceTarget = computed(() => {
+    if (formData.currency_ticket === 'KZT') return totalRawEquipmentPriceKZT.value
+    if (targetRate.value <= 0) return 0
+    
+    return selectedEquipment.value.reduce((sum, row) => {
+        if (row.sale_price_kzt !== undefined && row.sale_price_kzt !== null) {
+            // Round the UNIT PRICE in target currency first
+            const unitPriceTarget = Math.round(row.sale_price_kzt / targetRate.value)
+            return sum + (unitPriceTarget * row.quantity)
+        }
+        return sum
+    }, 0)
+})
+
+const totalAdjustedEquipmentPriceTarget = computed(() => {
+    if (formData.currency_ticket === 'KZT') return totalAdjustedEquipmentPriceKZT.value
+    if (targetRate.value <= 0) return 0
+    
+    return selectedEquipment.value.reduce((sum, row) => {
+        if (row.sale_price_kzt !== undefined && row.sale_price_kzt !== null) {
+            // Round the ADJUSTED UNIT PRICE in target currency first
+            const adjustedUnitPriceKZT = Math.round(row.sale_price_kzt * (1 + netAdjustmentPercentage.value / 100))
+            const adjustedUnitPriceTarget = Math.round(adjustedUnitPriceKZT / targetRate.value)
+            return sum + (adjustedUnitPriceTarget * row.quantity)
+        }
+        return sum
+    }, 0)
+})
+
+const totalAdjustmentAmountTarget = computed(() => {
+    return totalAdjustedEquipmentPriceTarget.value - totalRawEquipmentPriceTarget.value
+})
+
+const totalAdditionalServicesTarget = computed(() => {
+    if (formData.currency_ticket === 'KZT') return totalAdditionalServicesKZT.value
+    if (targetRate.value <= 0 || !formData.additional_services) return 0
+    return formData.additional_services.reduce((sum, svc) => {
+        return sum + Math.round(Number(svc.price || 0) / targetRate.value)
+    }, 0)
+})
+
+const calculatedTotalPrice = computed(() => {
+    return totalAdjustedEquipmentPriceTarget.value + totalAdditionalServicesTarget.value
+})
+
+// Legacy support if used elsewhere
+const totalSalePriceKZT = totalAdjustedEquipmentPriceKZT
+const totalAdjustmentValueKZT = totalAdjustmentAmountKZT
+
 // Calculate allocated overhead per unit for this row
 // Overhead is distributed proportionally to base costs
 const calculateAllocatedOverheadPerUnit = (row: EquipmentRow): number => {
@@ -1842,7 +2195,8 @@ const calculateMarginKZT = (row: EquipmentRow): number => {
     const purchasePriceKZT = calculatePurchasePriceKZT(row)
     const totalExpensesKZT = calculateTotalExpensesKZT(row)
     
-    return row.sale_price_kzt - purchasePriceKZT - totalExpensesKZT
+    const adjustedSalePrice = Math.round(row.sale_price_kzt * (1 + netAdjustmentPercentage.value / 100))
+    return adjustedSalePrice - purchasePriceKZT - totalExpensesKZT
 }
 
 // Calculate margin percentage
@@ -1916,37 +2270,10 @@ const totalMarginPercentage = computed(() => {
     return (totalMarginKZT.value / totalSalePrice) * 100
 })
 
-// Calculate total sale price (sum of all equipment sale prices)
-const totalSalePriceKZT = computed(() => {
-    return selectedEquipment.value.reduce((sum, row) => {
-        if (row.sale_price_kzt) {
-            return sum + (row.sale_price_kzt * row.quantity)
-        }
-        return sum
-    }, 0)
-})
 
-// Calculate total additional services price
-const totalAdditionalServicesKZT = computed(() => {
-    if (!formData.additional_services || !Array.isArray(formData.additional_services)) {
-        return 0
-    }
-    return formData.additional_services.reduce((sum: number, service: any) => {
-        return sum + (Number(service.price) || 0)
-    }, 0)
-})
-
-// Calculate total proposal price
-// Formula: Total Price = Sum of Sale Prices + Additional Services
-const calculatedTotalPriceKZT = computed(() => {
-    const salePrice = totalSalePriceKZT.value || 0
-    const servicesPrice = totalAdditionalServicesKZT.value || 0
-    const total = salePrice + servicesPrice
-    // Ensure we return a valid number (not NaN or Infinity)
-    return isNaN(total) || !isFinite(total) ? 0 : Math.max(0, total)
-})
 
 const handleEdit = async (row: CommercialProposal) => {
+    currentProposal.value = row
     isEditMode.value = true
     
     // Reset form first
@@ -1991,6 +2318,9 @@ const handleEdit = async (row: CommercialProposal) => {
         formData.total_price = fullProp.total_price // Restore total price
         // Restore additional services
         formData.additional_services = (fullProp.additional_services as any) || []
+        
+        // Restore adjustments
+        formData.adjustments = (fullProp as any).adjustments || []
         
         // Маржа теперь рассчитывается автоматически на бэкенде
         // margin_value и margin_percentage будут заполнены автоматически
@@ -2113,7 +2443,7 @@ const handleSubmit = async () => {
                 
                 // Set calculated total price (sum of sale prices + additional services)
                 // Ensure it's a valid number
-                const totalPrice = calculatedTotalPriceKZT.value
+                const totalPrice = calculatedTotalPrice.value
                 if (isNaN(totalPrice) || !isFinite(totalPrice) || totalPrice < 0) {
                     ElMessage.error('Некорректная итоговая цена. Проверьте цены оборудования.')
                     submitting.value = false
@@ -2126,49 +2456,62 @@ const handleSubmit = async () => {
                     payload.proposal_version = (payload.proposal_version || 1) + 1
                 }
 
+                // Update exchange_rate to the latest from the selected currency
+                payload.exchange_rate = getRate(formData.currency_ticket).toString()
+
                 // Add internal exchange rates snapshot
                 payload.internal_exchange_rates = internalExchangeRates.value
 
                 // Add equipment items with calculated_data
                 if (selectedEquipment.value.length > 0) {
                     payload.equipment_items = selectedEquipment.value.map(item => {
-                        // Calculate values if not already set
-                        const purchasePriceKZT = item.purchase_price_kzt !== undefined 
-                            ? item.purchase_price_kzt 
-                            : calculatePurchasePriceKZT(item)
-                        const baseCostKZT = item.base_cost_kzt !== undefined 
-                            ? item.base_cost_kzt 
-                            : calculateBaseCostKZT(item)
-                        const allocatedOverhead = item.allocated_overhead_per_unit !== undefined 
-                            ? item.allocated_overhead_per_unit 
-                            : 0
-                        const marginKZT = item.margin_kzt !== undefined 
-                            ? item.margin_kzt 
-                            : calculateMarginKZT(item)
-                        const marginPercentage = item.margin_percentage !== undefined 
-                            ? item.margin_percentage 
-                            : calculateMarginPercentage(item)
+                        // Calculate values robustly
+                        const pPriceKZT = calculatePurchasePriceKZT(item)
+                        const bCostKZT = calculateBaseCostKZT(item)
+                        const margKZT = calculateMarginKZT(item)
+                        const margPercentage = calculateMarginPercentage(item)
                         
+                        // Helper to ensure we don't send NaN or Infinity
+                        const safeNum = (val: any) => {
+                            const n = Number(val)
+                            return (isNaN(n) || !isFinite(n)) ? null : n
+                        }
+
                         return {
                             equipment_id: item.equipment_id,
                             quantity: item.quantity,
                             row_expenses: item.row_expenses || [],
                             calculated_data: {
-                                purchase_price_kzt: purchasePriceKZT || null,
-                                base_cost_kzt: baseCostKZT || null,
-                                allocated_overhead_per_unit: allocatedOverhead || null,
-                                margin_kzt: marginKZT || null,
-                                margin_percentage: marginPercentage || null
+                                purchase_price_kzt: safeNum(pPriceKZT),
+                                base_cost_kzt: safeNum(bCostKZT),
+                                allocated_overhead_per_unit: safeNum(item.allocated_overhead_per_unit) || 0,
+                                margin_kzt: safeNum(margKZT),
+                                margin_percentage: safeNum(margPercentage)
                             }
                         }
                     })
                 }
 
-                // Add payments
-                (payload as any).payment_logs = tempPayments.value.map(p => ({
-                    ...p,
-                    payment_value: p.payment_value.toString() // Ensure string format for Decimal
-                }))
+                // Add payments with string values
+                if (tempPayments.value.length > 0) {
+                    (payload as any).payment_logs = tempPayments.value.map(p => ({
+                        payment_name: p.payment_name,
+                        payment_value: p.payment_value.toString(),
+                        payment_date: p.payment_date,
+                        comments: p.comments
+                    }))
+                }
+
+                // Clean up adjustments to prevent "multiple values for keyword argument 'proposal'"
+                if (payload.adjustments && payload.adjustments.length > 0) {
+                    payload.adjustments = payload.adjustments.map(adj => {
+                        const { id, proposal, created_at, author_name, ...rest } = adj as any
+                        // Only send ID if it exists (for updates), otherwise let backend create it
+                        const cleaned: any = { ...rest }
+                        if (id) cleaned.id = id
+                        return cleaned
+                    })
+                }
 
                 if (isEditMode.value && formData.proposal_id) { 
                      await proposalsAPI.updateProposal(formData.proposal_id, payload)
@@ -2413,12 +2756,10 @@ watch(equipmentSearchQuery, () => {
 .text-gray-400 { color: #9ca3af; }
 .expense-tag-container { display: flex; align-items: center; margin-bottom: 4px; }
 .expense-tag { font-size: 0.85em; background: #f3f4f6; padding: 2px 6px; border-radius: 4px; flex: 1; }
-.calculation-section h3 { margin-bottom: 15px; color: #303133; }
-.rates-summary { margin-bottom: 20px; }
-.mx-1 { margin: 0 4px; }
-.summary-card { width: 600px; margin-bottom: 20px; }
+.calculation-summary-container { display: flex; flex-wrap: wrap; gap: 20px; margin-bottom: 20px; }
+.summary-card { flex: 1; min-width: 450px; max-width: 600px; }
 .summary-row { display: flex; justify-content: space-between; margin-bottom: 8px; }
-.margin-block { width: 600px; }
+.margin-block { width: 100%; }
 .w-100 { width: 100%; }
 .mr-2 { margin-right: 8px; }
 .final-price-display { margin-top: 20px; font-size: 1.2em; border-top: 1px solid #eba4a4; padding-top: 10px; display: flex; justify-content: space-between; font-weight: bold; color: #F56C6C; }
@@ -2426,4 +2767,11 @@ watch(equipmentSearchQuery, () => {
 .client-select-row .el-select { flex: 1; min-width: 0; }
 .bitrix-search-btn { flex-shrink: 0; }
 .option-meta { color: #909399; font-size: 12px; }
+
+/* Styles for Adjustments */
+.adjustment-row .label { font-weight: 500; }
+.adjustment-row .value { font-weight: bold; }
+.price-value { color: #409EFF; }
+.main-total { color: #F56C6C; font-size: 1.3em; }
+.target-total { color: #67C23A; font-size: 1.1em; font-weight: bold; }
 </style>

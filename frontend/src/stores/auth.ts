@@ -14,6 +14,8 @@ export const useAuthStore = defineStore('auth', () => {
   // Getters
   const isAdmin = computed(() => user.value?.user_role === 'Администратор')
   const isManager = computed(() => user.value?.user_role === 'Менеджер' || isAdmin.value)
+  const isJuniorManager = computed(() => user.value?.user_role === 'Младший менеджер')
+  const isAtLeastJuniorManager = computed(() => isManager.value || isJuniorManager.value)
   const isViewer = computed(() => user.value?.user_role === 'Просмотр')
   const userName = computed(() => user.value?.user_name || '')
   const userRole = computed(() => user.value?.user_role || '')
@@ -147,6 +149,8 @@ export const useAuthStore = defineStore('auth', () => {
     // Getters
     isAdmin,
     isManager,
+    isJuniorManager,
+    isAtLeastJuniorManager,
     isViewer,
     userName,
     userRole,

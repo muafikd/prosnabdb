@@ -101,7 +101,12 @@ export interface CommercialProposalCreateData {
     tax_price?: number;
     delivery_percentage?: number;
     delivery_price?: number;
-  }
+  };
+  adjustments?: {
+    adjustment_type: 'markup' | 'discount';
+    value_percentage: number;
+    comments?: string;
+  }[];
 }
 
 export interface CommercialProposalUpdateData extends Partial<CommercialProposalCreateData> { }

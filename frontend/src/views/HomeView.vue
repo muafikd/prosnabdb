@@ -61,14 +61,14 @@
         <div class="quick-links">
           <h3>Быстрые ссылки:</h3>
           <el-row :gutter="20">
-            <el-col :span="8" v-if="authStore.isManager">
+            <el-col :span="8" v-if="authStore.isAtLeastJuniorManager">
               <el-card shadow="hover" class="link-card" @click="router.push('/equipment')">
                 <el-icon :size="40"><Box /></el-icon>
                 <h4>Оборудование</h4>
                 <p>Управление каталогом оборудования</p>
               </el-card>
             </el-col>
-            <el-col :span="8" v-if="authStore.isManager">
+            <el-col :span="8" v-if="authStore.isAtLeastJuniorManager">
               <el-card shadow="hover" class="link-card" @click="router.push('/proposals')">
                 <el-icon :size="40"><Document /></el-icon>
                 <h4>Коммерческие предложения</h4>

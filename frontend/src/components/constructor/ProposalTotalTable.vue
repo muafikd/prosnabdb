@@ -20,13 +20,13 @@ const additionalServices = computed(() => props.dataPackage?.additional_services
 const total = computed(() => {
     // Prefer total_price from proposal if available as it includes everything including services
     if (props.dataPackage?.proposal?.total_price) {
-        return Number(props.dataPackage.proposal.total_price)
+        return Math.round(Number(props.dataPackage.proposal.total_price))
     }
     // Fallback calculation (might be inaccurate if services are not added)
     const items = props.dataPackage?.equipment_list || []
-    const eqTotal = items.reduce((sum: number, item: any) => sum + (item.total_price || 0), 0)
-    const svcTotal = additionalServices.value.reduce((sum: number, svc: any) => sum + Number(svc.price || 0), 0)
-    return eqTotal + svcTotal
+    const eqTotal = items.reduce((sum: number, item: any) => sum + Math.round(item.total_price || 0), 0)
+    const svcTotal = additionalServices.value.reduce((sum: number, svc: any) => sum + Math.round(Number(svc.price || 0)), 0)
+    return Math.round(eqTotal + svcTotal)
 })
 
 
@@ -39,8 +39,8 @@ const formatPrice = (value: number | string, currency: string) => {
   const num = Number(value)
   return new Intl.NumberFormat('ru-RU', {
     style: 'decimal',
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0
   }).format(num)
 }
 

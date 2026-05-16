@@ -15,7 +15,7 @@
                 <span style="margin-left: 5px">Карточки</span>
               </el-radio-button>
             </el-radio-group>
-            <el-button type="primary" @click="handleCreate">
+            <el-button v-if="!authStore.isJuniorManager" type="primary" @click="handleCreate">
               <el-icon><Plus /></el-icon>
               Добавить оборудование
             </el-button>
@@ -133,7 +133,7 @@
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="equipment_manufacture_price" label="Цена (З) в валюте" width="150">
+        <el-table-column v-if="!authStore.isJuniorManager" prop="equipment_manufacture_price" label="Цена (З) в валюте" width="150">
           <template #default="{ row }">
             {{ formatPrice(row.equipment_manufacture_price, row.equipment_price_currency_type) }}
           </template>
@@ -153,20 +153,24 @@
         <el-table-column label="Действия" width="200" fixed="right">
           <template #default="{ row }">
             <el-button
-              type="primary"
+              :type="authStore.isJuniorManager ? 'info' : 'primary'"
               size="small"
-              :icon="Edit"
+              :icon="authStore.isJuniorManager ? View : Edit"
               @click="handleEdit(row)"
               circle
+              :title="authStore.isJuniorManager ? 'Просмотр' : 'Редактировать'"
             />
             <el-button
+              v-if="!authStore.isJuniorManager"
               type="danger"
               size="small"
               :icon="Delete"
               @click="handleDelete(row)"
               circle
+              title="Удалить"
             />
             <el-button
+              v-if="!authStore.isJuniorManager"
               type="success"
               size="small"
               :icon="Upload"
@@ -257,14 +261,15 @@
             </div>
             <div class="card-actions">
               <el-button
-                type="primary"
+                :type="authStore.isJuniorManager ? 'info' : 'primary'"
                 size="small"
-                :icon="Edit"
+                :icon="authStore.isJuniorManager ? View : Edit"
                 @click="handleEdit(item)"
               >
-                Редактировать
+                {{ authStore.isJuniorManager ? 'Просмотр' : 'Редактировать' }}
               </el-button>
               <el-button
+                v-if="!authStore.isJuniorManager"
                 type="danger"
                 size="small"
                 :icon="Delete"
@@ -273,6 +278,7 @@
                 Удалить
               </el-button>
               <el-button
+                v-if="!authStore.isJuniorManager"
                 type="success"
                 size="small"
                 :icon="Upload"
@@ -464,7 +470,7 @@
         </el-tab-pane>
 
         <!-- Цена -->
-        <el-tab-pane label="Цена" name="price">
+        <el-tab-pane v-if="!authStore.isJuniorManager" label="Цена" name="price">
           <el-form
             :model="formData"
             label-width="200px"
@@ -935,7 +941,7 @@
         </el-tab-pane>
       </el-tabs>
 
-      <template #footer>
+      <template #footer v-if="!authStore.isJuniorManager">
         <span class="dialog-footer">
           <el-button @click="dialogVisible = false">Отмена</el-button>
           <el-button type="primary" :loading="submitting" @click="handleSubmit">
@@ -1070,7 +1076,7 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted, computed, nextTick } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
-import { Plus, Edit, Delete, Search, List, Grid, Picture, Link, Document, Loading, Upload } from '@element-plus/icons-vue'
+import { Plus, Edit, Delete, Search, List, Grid, Picture, Link, Document, Loading, Upload, View } from '@element-plus/icons-vue'
 import {
   equipmentAPI,
   categoriesAPI,
@@ -1097,10 +1103,12 @@ import { format } from 'date-fns'
 import { formatPrice, inputFormatter, inputParser } from '@/utils/formatters'
 import { getImageSrc } from '@/utils/imageProxy'
 import { useExchangeRateStore } from '@/stores/exchangeRate'
+import { useAuthStore } from '@/stores/auth'
 import { exchangeRatesAPI } from '@/api/exchangeRates'
 import { satuAPI } from '@/api/satu'
 
-// State
+const exchangeRateStore = useExchangeRateStore()
+const authStore = useAuthStore()
 const satuBulkExporting = ref(false)
 const loading = ref(false)
 const submitting = ref(false)
@@ -1122,7 +1130,6 @@ const viewMode = ref<'table' | 'grid'>('table')
 const cardImageLoaded = ref<Record<number, boolean>>({})
 
 // Exchange rate store
-const exchangeRateStore = useExchangeRateStore()
 
 // Popular countries list
 const popularCountries = [

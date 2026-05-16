@@ -100,7 +100,7 @@ router.beforeEach(async (to: RouteLocationNormalized, from: RouteLocationNormali
   }
 
   // Проверка прав доступа для менеджеров/администраторов
-  if (to.meta.requiresManager && !authStore.isManager) {
+  if (to.meta.requiresManager && !authStore.isAtLeastJuniorManager) {
     next({ name: 'home' })
     return
   }

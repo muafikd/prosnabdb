@@ -51,7 +51,10 @@ from .serializers import (
 )
 from .services import CostCalculationService, DataAggregatorService
 from core.services.exchange_rate_service import ExchangeRateService
-from .permissions import IsManagerOrAdmin, IsAdmin, IsSuperuser
+from .permissions import (
+    IsManagerOrAdmin, IsAdmin, IsSuperuser, 
+    IsJuniorManager, IsAtLeastJuniorManager, IsProposalOwnerOrAbove
+)
 from .tasks import generate_pdf_task
 from celery.result import AsyncResult
 import requests
@@ -211,7 +214,12 @@ class ClientListView(generics.ListCreateAPIView):
     """
     queryset = Client.objects.all()
     serializer_class = ClientSerializer
-    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+    permission_classes = [permissions.IsAuthenticated, IsAtLeastJuniorManager]
+    
+    def get_permissions(self):
+        if self.request.method in permissions.SAFE_METHODS:
+            return [permissions.IsAuthenticated(), IsAtLeastJuniorManager()]
+        return [permissions.IsAuthenticated(), IsManagerOrAdmin()]
     
     def get_queryset(self):
         """Return all clients, optionally filtered by search (имя клиента или название компании)."""
@@ -235,7 +243,12 @@ class ClientDetailView(generics.RetrieveUpdateDestroyAPIView):
     """
     queryset = Client.objects.all()
     serializer_class = ClientSerializer
-    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+    permission_classes = [permissions.IsAuthenticated, IsAtLeastJuniorManager]
+    
+    def get_permissions(self):
+        if self.request.method in permissions.SAFE_METHODS:
+            return [permissions.IsAuthenticated(), IsAtLeastJuniorManager()]
+        return [permissions.IsAuthenticated(), IsManagerOrAdmin()]
     lookup_field = 'client_id'
 
 
@@ -248,7 +261,12 @@ class CategoryListView(generics.ListCreateAPIView):
     """
     queryset = Category.objects.all()
     serializer_class = CategorySerializer
-    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+    permission_classes = [permissions.IsAuthenticated, IsAtLeastJuniorManager]
+    
+    def get_permissions(self):
+        if self.request.method in permissions.SAFE_METHODS:
+            return [permissions.IsAuthenticated(), IsAtLeastJuniorManager()]
+        return [permissions.IsAuthenticated(), IsManagerOrAdmin()]
     
     def get_queryset(self):
         """Return all categories, optionally filtered by search or parent."""
@@ -283,7 +301,12 @@ class CategoryDetailView(generics.RetrieveUpdateDestroyAPIView):
     """
     queryset = Category.objects.all()
     serializer_class = CategorySerializer
-    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+    permission_classes = [permissions.IsAuthenticated, IsAtLeastJuniorManager]
+    
+    def get_permissions(self):
+        if self.request.method in permissions.SAFE_METHODS:
+            return [permissions.IsAuthenticated(), IsAtLeastJuniorManager()]
+        return [permissions.IsAuthenticated(), IsManagerOrAdmin()]
     lookup_field = 'category_id'
 
 
@@ -296,7 +319,12 @@ class ManufacturerListView(generics.ListCreateAPIView):
     """
     queryset = Manufacturer.objects.all()
     serializer_class = ManufacturerSerializer
-    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+    permission_classes = [permissions.IsAuthenticated, IsAtLeastJuniorManager]
+    
+    def get_permissions(self):
+        if self.request.method in permissions.SAFE_METHODS:
+            return [permissions.IsAuthenticated(), IsAtLeastJuniorManager()]
+        return [permissions.IsAuthenticated(), IsManagerOrAdmin()]
     
     def get_queryset(self):
         """Return all manufacturers, optionally filtered by search."""
@@ -325,7 +353,12 @@ class ManufacturerDetailView(generics.RetrieveUpdateDestroyAPIView):
     """
     queryset = Manufacturer.objects.all()
     serializer_class = ManufacturerSerializer
-    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+    permission_classes = [permissions.IsAuthenticated, IsAtLeastJuniorManager]
+    
+    def get_permissions(self):
+        if self.request.method in permissions.SAFE_METHODS:
+            return [permissions.IsAuthenticated(), IsAtLeastJuniorManager()]
+        return [permissions.IsAuthenticated(), IsManagerOrAdmin()]
     lookup_field = 'manufacturer_id'
 
     def destroy(self, request, *args, **kwargs):
@@ -350,7 +383,12 @@ class EquipmentTypesListView(generics.ListCreateAPIView):
     """
     queryset = EquipmentTypes.objects.all()
     serializer_class = EquipmentTypesSerializer
-    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+    permission_classes = [permissions.IsAuthenticated, IsAtLeastJuniorManager]
+    
+    def get_permissions(self):
+        if self.request.method in permissions.SAFE_METHODS:
+            return [permissions.IsAuthenticated(), IsAtLeastJuniorManager()]
+        return [permissions.IsAuthenticated(), IsManagerOrAdmin()]
     
     def get_queryset(self):
         """Return all equipment types, optionally filtered by search."""
@@ -375,7 +413,12 @@ class EquipmentTypesDetailView(generics.RetrieveUpdateDestroyAPIView):
     """
     queryset = EquipmentTypes.objects.all()
     serializer_class = EquipmentTypesSerializer
-    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+    permission_classes = [permissions.IsAuthenticated, IsAtLeastJuniorManager]
+    
+    def get_permissions(self):
+        if self.request.method in permissions.SAFE_METHODS:
+            return [permissions.IsAuthenticated(), IsAtLeastJuniorManager()]
+        return [permissions.IsAuthenticated(), IsManagerOrAdmin()]
     lookup_field = 'type_id'
 
 
@@ -388,7 +431,12 @@ class EquipmentDetailsListView(generics.ListCreateAPIView):
     """
     queryset = EquipmentDetails.objects.all()
     serializer_class = EquipmentDetailsSerializer
-    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+    permission_classes = [permissions.IsAuthenticated, IsAtLeastJuniorManager]
+    
+    def get_permissions(self):
+        if self.request.method in permissions.SAFE_METHODS:
+            return [permissions.IsAuthenticated(), IsAtLeastJuniorManager()]
+        return [permissions.IsAuthenticated(), IsManagerOrAdmin()]
     
     def get_queryset(self):
         """Return all equipment details, optionally filtered by search."""
@@ -417,7 +465,12 @@ class EquipmentDetailsDetailView(generics.RetrieveUpdateDestroyAPIView):
     """
     queryset = EquipmentDetails.objects.all()
     serializer_class = EquipmentDetailsSerializer
-    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+    permission_classes = [permissions.IsAuthenticated, IsAtLeastJuniorManager]
+    
+    def get_permissions(self):
+        if self.request.method in permissions.SAFE_METHODS:
+            return [permissions.IsAuthenticated(), IsAtLeastJuniorManager()]
+        return [permissions.IsAuthenticated(), IsManagerOrAdmin()]
     lookup_field = 'detail_id'
 
 
@@ -426,7 +479,12 @@ class EquipmentDetailsBulkView(APIView):
     Bulk import/update equipment details. Accepts [{"key": "Вес", "value": "10кг"}, ...].
     Uses update_or_create by (equipment_id, detail_parameter_name): existing params are updated, new ones created.
     """
-    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+    permission_classes = [permissions.IsAuthenticated, IsAtLeastJuniorManager]
+    
+    def get_permissions(self):
+        if self.request.method in permissions.SAFE_METHODS:
+            return [permissions.IsAuthenticated(), IsAtLeastJuniorManager()]
+        return [permissions.IsAuthenticated(), IsManagerOrAdmin()]
 
     def post(self, request, equipment_id):
         items = request.data
@@ -474,7 +532,12 @@ class EquipmentSpecificationListView(generics.ListCreateAPIView):
     """
     queryset = EquipmentSpecification.objects.all()
     serializer_class = EquipmentSpecificationSerializer
-    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+    permission_classes = [permissions.IsAuthenticated, IsAtLeastJuniorManager]
+    
+    def get_permissions(self):
+        if self.request.method in permissions.SAFE_METHODS:
+            return [permissions.IsAuthenticated(), IsAtLeastJuniorManager()]
+        return [permissions.IsAuthenticated(), IsManagerOrAdmin()]
     
     def get_queryset(self):
         """Return all equipment specifications, optionally filtered by search."""
@@ -503,7 +566,12 @@ class EquipmentSpecificationDetailView(generics.RetrieveUpdateDestroyAPIView):
     """
     queryset = EquipmentSpecification.objects.all()
     serializer_class = EquipmentSpecificationSerializer
-    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+    permission_classes = [permissions.IsAuthenticated, IsAtLeastJuniorManager]
+    
+    def get_permissions(self):
+        if self.request.method in permissions.SAFE_METHODS:
+            return [permissions.IsAuthenticated(), IsAtLeastJuniorManager()]
+        return [permissions.IsAuthenticated(), IsManagerOrAdmin()]
     lookup_field = 'spec_id'
 
 
@@ -512,7 +580,12 @@ class EquipmentSpecificationBulkView(APIView):
     Bulk import/update equipment specifications. Accepts [{"key": "Мощность", "value": "0,55 кВт"}, ...].
     Uses update_or_create by (equipment_id, spec_parameter_name): existing params are updated, new ones created.
     """
-    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+    permission_classes = [permissions.IsAuthenticated, IsAtLeastJuniorManager]
+    
+    def get_permissions(self):
+        if self.request.method in permissions.SAFE_METHODS:
+            return [permissions.IsAuthenticated(), IsAtLeastJuniorManager()]
+        return [permissions.IsAuthenticated(), IsManagerOrAdmin()]
 
     def post(self, request, equipment_id):
         items = request.data
@@ -560,7 +633,12 @@ class EquipmentTechProcessListView(generics.ListCreateAPIView):
     """
     queryset = EquipmentTechProcess.objects.all()
     serializer_class = EquipmentTechProcessSerializer
-    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+    permission_classes = [permissions.IsAuthenticated, IsAtLeastJuniorManager]
+    
+    def get_permissions(self):
+        if self.request.method in permissions.SAFE_METHODS:
+            return [permissions.IsAuthenticated(), IsAtLeastJuniorManager()]
+        return [permissions.IsAuthenticated(), IsManagerOrAdmin()]
     
     def get_queryset(self):
         """Return all equipment tech processes, optionally filtered by search."""
@@ -591,7 +669,12 @@ class EquipmentTechProcessDetailView(generics.RetrieveUpdateDestroyAPIView):
     """
     queryset = EquipmentTechProcess.objects.all()
     serializer_class = EquipmentTechProcessSerializer
-    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+    permission_classes = [permissions.IsAuthenticated, IsAtLeastJuniorManager]
+    
+    def get_permissions(self):
+        if self.request.method in permissions.SAFE_METHODS:
+            return [permissions.IsAuthenticated(), IsAtLeastJuniorManager()]
+        return [permissions.IsAuthenticated(), IsManagerOrAdmin()]
     lookup_field = 'tech_id'
 
 
@@ -604,7 +687,12 @@ class EquipmentListView(generics.ListCreateAPIView):
     """
     queryset = Equipment.objects.all()
     serializer_class = EquipmentSerializer
-    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+    permission_classes = [permissions.IsAuthenticated, IsAtLeastJuniorManager]
+    
+    def get_permissions(self):
+        if self.request.method in permissions.SAFE_METHODS:
+            return [permissions.IsAuthenticated(), IsAtLeastJuniorManager()]
+        return [permissions.IsAuthenticated(), IsManagerOrAdmin()]
     
     def create(self, request, *args, **kwargs):
         """Override create to add logging and ensure equipment is saved."""
@@ -691,7 +779,12 @@ class EquipmentDetailView(generics.RetrieveUpdateDestroyAPIView):
         'details', 'specifications', 'tech_processes', 'photos'
     ).all()
     serializer_class = EquipmentSerializer
-    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+    permission_classes = [permissions.IsAuthenticated, IsAtLeastJuniorManager]
+    
+    def get_permissions(self):
+        if self.request.method in permissions.SAFE_METHODS:
+            return [permissions.IsAuthenticated(), IsAtLeastJuniorManager()]
+        return [permissions.IsAuthenticated(), IsManagerOrAdmin()]
     lookup_field = 'equipment_id'
 
 
@@ -704,7 +797,12 @@ class PurchasePriceListView(generics.ListCreateAPIView):
     """
     queryset = PurchasePrice.objects.select_related('equipment').all()
     serializer_class = PurchasePriceSerializer
-    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+    permission_classes = [permissions.IsAuthenticated, IsAtLeastJuniorManager]
+    
+    def get_permissions(self):
+        if self.request.method in permissions.SAFE_METHODS:
+            return [permissions.IsAuthenticated(), IsAtLeastJuniorManager()]
+        return [permissions.IsAuthenticated(), IsManagerOrAdmin()]
     
     def get_queryset(self):
         """Return all purchase prices, optionally filtered by search or filters."""
@@ -745,7 +843,12 @@ class PurchasePriceDetailView(generics.RetrieveUpdateDestroyAPIView):
     """
     queryset = PurchasePrice.objects.select_related('equipment').all()
     serializer_class = PurchasePriceSerializer
-    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+    permission_classes = [permissions.IsAuthenticated, IsAtLeastJuniorManager]
+    
+    def get_permissions(self):
+        if self.request.method in permissions.SAFE_METHODS:
+            return [permissions.IsAuthenticated(), IsAtLeastJuniorManager()]
+        return [permissions.IsAuthenticated(), IsManagerOrAdmin()]
     lookup_field = 'price_id'
 
 
@@ -758,7 +861,12 @@ class LogisticsListView(generics.ListCreateAPIView):
     """
     queryset = Logistics.objects.select_related('equipment').all()
     serializer_class = LogisticsSerializer
-    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+    permission_classes = [permissions.IsAuthenticated, IsAtLeastJuniorManager]
+    
+    def get_permissions(self):
+        if self.request.method in permissions.SAFE_METHODS:
+            return [permissions.IsAuthenticated(), IsAtLeastJuniorManager()]
+        return [permissions.IsAuthenticated(), IsManagerOrAdmin()]
     
     def get_queryset(self):
         """Return all logistics, optionally filtered by search or filters."""
@@ -799,7 +907,12 @@ class LogisticsDetailView(generics.RetrieveUpdateDestroyAPIView):
     """
     queryset = Logistics.objects.select_related('equipment').all()
     serializer_class = LogisticsSerializer
-    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+    permission_classes = [permissions.IsAuthenticated, IsAtLeastJuniorManager]
+    
+    def get_permissions(self):
+        if self.request.method in permissions.SAFE_METHODS:
+            return [permissions.IsAuthenticated(), IsAtLeastJuniorManager()]
+        return [permissions.IsAuthenticated(), IsManagerOrAdmin()]
     lookup_field = 'logistics_id'
 
 
@@ -812,7 +925,12 @@ class EquipmentDocumentListView(generics.ListCreateAPIView):
     """
     queryset = EquipmentDocument.objects.select_related('equipment').all()
     serializer_class = EquipmentDocumentSerializer
-    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+    permission_classes = [permissions.IsAuthenticated, IsAtLeastJuniorManager]
+    
+    def get_permissions(self):
+        if self.request.method in permissions.SAFE_METHODS:
+            return [permissions.IsAuthenticated(), IsAtLeastJuniorManager()]
+        return [permissions.IsAuthenticated(), IsManagerOrAdmin()]
     
     def get_queryset(self):
         """Return all equipment documents, optionally filtered by search or filters."""
@@ -859,7 +977,12 @@ class EquipmentDocumentDetailView(generics.RetrieveUpdateDestroyAPIView):
     """
     queryset = EquipmentDocument.objects.select_related('equipment').all()
     serializer_class = EquipmentDocumentSerializer
-    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+    permission_classes = [permissions.IsAuthenticated, IsAtLeastJuniorManager]
+    
+    def get_permissions(self):
+        if self.request.method in permissions.SAFE_METHODS:
+            return [permissions.IsAuthenticated(), IsAtLeastJuniorManager()]
+        return [permissions.IsAuthenticated(), IsManagerOrAdmin()]
     lookup_field = 'document_id'
 
 
@@ -872,7 +995,12 @@ class EquipmentLineListView(generics.ListCreateAPIView):
     """
     queryset = EquipmentLine.objects.prefetch_related('line_items__equipment').all()
     serializer_class = EquipmentLineSerializer
-    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+    permission_classes = [permissions.IsAuthenticated, IsAtLeastJuniorManager]
+    
+    def get_permissions(self):
+        if self.request.method in permissions.SAFE_METHODS:
+            return [permissions.IsAuthenticated(), IsAtLeastJuniorManager()]
+        return [permissions.IsAuthenticated(), IsManagerOrAdmin()]
     
     def get_queryset(self):
         """Return all equipment lines, optionally filtered by search."""
@@ -897,7 +1025,12 @@ class EquipmentLineDetailView(generics.RetrieveUpdateDestroyAPIView):
     """
     queryset = EquipmentLine.objects.prefetch_related('line_items__equipment').all()
     serializer_class = EquipmentLineSerializer
-    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+    permission_classes = [permissions.IsAuthenticated, IsAtLeastJuniorManager]
+    
+    def get_permissions(self):
+        if self.request.method in permissions.SAFE_METHODS:
+            return [permissions.IsAuthenticated(), IsAtLeastJuniorManager()]
+        return [permissions.IsAuthenticated(), IsManagerOrAdmin()]
     lookup_field = 'equipment_line_id'
 
 
@@ -910,7 +1043,12 @@ class EquipmentLineItemListView(generics.ListCreateAPIView):
     """
     queryset = EquipmentLineItem.objects.select_related('equipment_line', 'equipment').all()
     serializer_class = EquipmentLineItemSerializer
-    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+    permission_classes = [permissions.IsAuthenticated, IsAtLeastJuniorManager]
+    
+    def get_permissions(self):
+        if self.request.method in permissions.SAFE_METHODS:
+            return [permissions.IsAuthenticated(), IsAtLeastJuniorManager()]
+        return [permissions.IsAuthenticated(), IsManagerOrAdmin()]
     
     def get_queryset(self):
         """Return all equipment line items, optionally filtered."""
@@ -942,7 +1080,12 @@ class EquipmentLineItemDetailView(generics.RetrieveUpdateDestroyAPIView):
     """
     queryset = EquipmentLineItem.objects.select_related('equipment_line', 'equipment').all()
     serializer_class = EquipmentLineItemSerializer
-    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+    permission_classes = [permissions.IsAuthenticated, IsAtLeastJuniorManager]
+    
+    def get_permissions(self):
+        if self.request.method in permissions.SAFE_METHODS:
+            return [permissions.IsAuthenticated(), IsAtLeastJuniorManager()]
+        return [permissions.IsAuthenticated(), IsManagerOrAdmin()]
     
     def get_object(self):
         """Get object using composite key (equipment_line_id + equipment_id)."""
@@ -968,7 +1111,12 @@ class AdditionalPricesListView(generics.ListCreateAPIView):
     """
     queryset = AdditionalPrices.objects.all()
     serializer_class = AdditionalPricesSerializer
-    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+    permission_classes = [permissions.IsAuthenticated, IsAtLeastJuniorManager]
+    
+    def get_permissions(self):
+        if self.request.method in permissions.SAFE_METHODS:
+            return [permissions.IsAuthenticated(), IsAtLeastJuniorManager()]
+        return [permissions.IsAuthenticated(), IsManagerOrAdmin()]
     
     def get_queryset(self):
         """Return all additional prices, optionally filtered by search or filters."""
@@ -1003,7 +1151,12 @@ class AdditionalPricesDetailView(generics.RetrieveUpdateDestroyAPIView):
     """
     queryset = AdditionalPrices.objects.all()
     serializer_class = AdditionalPricesSerializer
-    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+    permission_classes = [permissions.IsAuthenticated, IsAtLeastJuniorManager]
+    
+    def get_permissions(self):
+        if self.request.method in permissions.SAFE_METHODS:
+            return [permissions.IsAuthenticated(), IsAtLeastJuniorManager()]
+        return [permissions.IsAuthenticated(), IsManagerOrAdmin()]
     lookup_field = 'price_id'
 
 
@@ -1018,7 +1171,12 @@ class EquipmentListListView(generics.ListCreateAPIView):
         'line_items__equipment_line', 'equipment_items_relation__equipment', 'additional_price'
     ).all()
     serializer_class = EquipmentListSerializer
-    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+    permission_classes = [permissions.IsAuthenticated, IsAtLeastJuniorManager]
+    
+    def get_permissions(self):
+        if self.request.method in permissions.SAFE_METHODS:
+            return [permissions.IsAuthenticated(), IsAtLeastJuniorManager()]
+        return [permissions.IsAuthenticated(), IsManagerOrAdmin()]
     
     def get_queryset(self):
         """Return all equipment lists, optionally filtered."""
@@ -1057,7 +1215,12 @@ class EquipmentListDetailView(generics.RetrieveUpdateDestroyAPIView):
         'line_items__equipment_line', 'equipment_items_relation__equipment', 'additional_price'
     ).all()
     serializer_class = EquipmentListSerializer
-    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+    permission_classes = [permissions.IsAuthenticated, IsAtLeastJuniorManager]
+    
+    def get_permissions(self):
+        if self.request.method in permissions.SAFE_METHODS:
+            return [permissions.IsAuthenticated(), IsAtLeastJuniorManager()]
+        return [permissions.IsAuthenticated(), IsManagerOrAdmin()]
     lookup_field = 'list_id'
 
 
@@ -1070,7 +1233,12 @@ class EquipmentListLineItemListView(generics.ListCreateAPIView):
     """
     queryset = EquipmentListLineItem.objects.select_related('equipment_list', 'equipment_line').all()
     serializer_class = EquipmentListLineItemSerializer
-    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+    permission_classes = [permissions.IsAuthenticated, IsAtLeastJuniorManager]
+    
+    def get_permissions(self):
+        if self.request.method in permissions.SAFE_METHODS:
+            return [permissions.IsAuthenticated(), IsAtLeastJuniorManager()]
+        return [permissions.IsAuthenticated(), IsManagerOrAdmin()]
     
     def get_queryset(self):
         """Return all equipment list line items, optionally filtered."""
@@ -1095,7 +1263,12 @@ class EquipmentListLineItemDetailView(generics.RetrieveUpdateDestroyAPIView):
     """
     queryset = EquipmentListLineItem.objects.select_related('equipment_list', 'equipment_line').all()
     serializer_class = EquipmentListLineItemSerializer
-    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+    permission_classes = [permissions.IsAuthenticated, IsAtLeastJuniorManager]
+    
+    def get_permissions(self):
+        if self.request.method in permissions.SAFE_METHODS:
+            return [permissions.IsAuthenticated(), IsAtLeastJuniorManager()]
+        return [permissions.IsAuthenticated(), IsManagerOrAdmin()]
     
     def get_object(self):
         """Get object using composite key (list_id + equipment_line_id)."""
@@ -1121,7 +1294,12 @@ class EquipmentListItemListView(generics.ListCreateAPIView):
     """
     queryset = EquipmentListItem.objects.select_related('equipment_list', 'equipment').all()
     serializer_class = EquipmentListItemSerializer
-    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+    permission_classes = [permissions.IsAuthenticated, IsAtLeastJuniorManager]
+    
+    def get_permissions(self):
+        if self.request.method in permissions.SAFE_METHODS:
+            return [permissions.IsAuthenticated(), IsAtLeastJuniorManager()]
+        return [permissions.IsAuthenticated(), IsManagerOrAdmin()]
     
     def get_queryset(self):
         """Return all equipment list items, optionally filtered."""
@@ -1146,7 +1324,12 @@ class EquipmentListItemDetailView(generics.RetrieveUpdateDestroyAPIView):
     """
     queryset = EquipmentListItem.objects.select_related('equipment_list', 'equipment').all()
     serializer_class = EquipmentListItemSerializer
-    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+    permission_classes = [permissions.IsAuthenticated, IsAtLeastJuniorManager]
+    
+    def get_permissions(self):
+        if self.request.method in permissions.SAFE_METHODS:
+            return [permissions.IsAuthenticated(), IsAtLeastJuniorManager()]
+        return [permissions.IsAuthenticated(), IsManagerOrAdmin()]
     
     def get_object(self):
         """Get object using composite key (list_id + equipment_id)."""
@@ -1172,7 +1355,12 @@ class PaymentLogListView(generics.ListCreateAPIView):
     """
     queryset = PaymentLog.objects.select_related('user').all()
     serializer_class = PaymentLogSerializer
-    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+    permission_classes = [permissions.IsAuthenticated, IsAtLeastJuniorManager]
+    
+    def get_permissions(self):
+        if self.request.method in permissions.SAFE_METHODS:
+            return [permissions.IsAuthenticated(), IsAtLeastJuniorManager()]
+        return [permissions.IsAuthenticated(), IsManagerOrAdmin()]
     
     def perform_create(self, serializer):
         """Set the user to the current user when creating a payment log."""
@@ -1215,7 +1403,12 @@ class PaymentLogDetailView(generics.RetrieveUpdateDestroyAPIView):
     """
     queryset = PaymentLog.objects.select_related('user').all()
     serializer_class = PaymentLogSerializer
-    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+    permission_classes = [permissions.IsAuthenticated]
+    
+    def get_permissions(self):
+        if self.request.method in permissions.SAFE_METHODS:
+            return [permissions.IsAuthenticated(), IsAtLeastJuniorManager()]
+        return [permissions.IsAuthenticated(), IsManagerOrAdmin()]
     lookup_field = 'payment_id'
     
     def perform_update(self, serializer):
@@ -1236,7 +1429,12 @@ class CommercialProposalListView(generics.ListCreateAPIView):
         'payment_logs', 'equipment_lists'
     ).all()
     serializer_class = CommercialProposalSerializer
-    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+    permission_classes = [permissions.IsAuthenticated, IsAtLeastJuniorManager]
+    
+    def get_permissions(self):
+        if self.request.method in permissions.SAFE_METHODS:
+            return [permissions.IsAuthenticated(), IsAtLeastJuniorManager()]
+        return [permissions.IsAuthenticated(), IsManagerOrAdmin()]
     
     def perform_create(self, serializer):
         """Create proposal and automatically calculate cost_price, total_price, and margin."""
@@ -1349,8 +1547,9 @@ class CommercialProposalDetailView(generics.RetrieveUpdateDestroyAPIView):
         'payment_logs', 'equipment_lists'
     ).all()
     serializer_class = CommercialProposalSerializer
-    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+    permission_classes = [permissions.IsAuthenticated, IsProposalOwnerOrAbove]
     lookup_field = 'proposal_id'
+
     
     def perform_update(self, serializer):
         """Update proposal and automatically recalculate cost_price and total_price if equipment changed."""
@@ -1391,7 +1590,12 @@ class CommercialProposalRefreshDataPackageView(APIView):
     
     POST /api/commercial-proposals/{id}/refresh-data-package/
     """
-    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+    permission_classes = [permissions.IsAuthenticated, IsAtLeastJuniorManager]
+    
+    def get_permissions(self):
+        if self.request.method in permissions.SAFE_METHODS:
+            return [permissions.IsAuthenticated(), IsAtLeastJuniorManager()]
+        return [permissions.IsAuthenticated(), IsManagerOrAdmin()]
     
     def _fix_json_serialization(self, obj):
         """Recursively fix JSON serialization issues in data structures."""
@@ -1470,7 +1674,12 @@ class CommercialProposalCopyView(generics.CreateAPIView):
     """
     queryset = CommercialProposal.objects.all()
     serializer_class = CommercialProposalSerializer
-    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+    permission_classes = [permissions.IsAuthenticated, IsAtLeastJuniorManager]
+    
+    def get_permissions(self):
+        if self.request.method in permissions.SAFE_METHODS:
+            return [permissions.IsAuthenticated(), IsAtLeastJuniorManager()]
+        return [permissions.IsAuthenticated(), IsManagerOrAdmin()]
     lookup_field = 'proposal_id'
     
     def post(self, request, *args, **kwargs):
@@ -1876,7 +2085,12 @@ class ExchangeRateListView(generics.ListCreateAPIView):
         'proposal', 'created_by'
     ).all()
     serializer_class = ExchangeRateSerializer
-    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+    permission_classes = [permissions.IsAuthenticated, IsAtLeastJuniorManager]
+    
+    def get_permissions(self):
+        if self.request.method in permissions.SAFE_METHODS:
+            return [permissions.IsAuthenticated(), IsAtLeastJuniorManager()]
+        return [permissions.IsAuthenticated(), IsManagerOrAdmin()]
     
     def get_queryset(self):
         """Return all exchange rates, optionally filtered by search or filters."""
@@ -1973,7 +2187,12 @@ class ExchangeRateSyncView(generics.GenericAPIView):
     
     POST /api/exchange-rates/sync/
     """
-    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+    permission_classes = [permissions.IsAuthenticated, IsAtLeastJuniorManager]
+    
+    def get_permissions(self):
+        if self.request.method in permissions.SAFE_METHODS:
+            return [permissions.IsAuthenticated(), IsAtLeastJuniorManager()]
+        return [permissions.IsAuthenticated(), IsManagerOrAdmin()]
     serializer_class = serializers.Serializer # Generic placeholder
     
     def post(self, request, *args, **kwargs):
@@ -1997,7 +2216,12 @@ class ExchangeRateAddView(generics.GenericAPIView):
     POST /api/exchange-rates/add/
     Body: {"currency_code": "GBP"}
     """
-    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+    permission_classes = [permissions.IsAuthenticated, IsAtLeastJuniorManager]
+    
+    def get_permissions(self):
+        if self.request.method in permissions.SAFE_METHODS:
+            return [permissions.IsAuthenticated(), IsAtLeastJuniorManager()]
+        return [permissions.IsAuthenticated(), IsManagerOrAdmin()]
     serializer_class = serializers.Serializer # Placeholder
     
     @extend_schema(
@@ -2115,7 +2339,12 @@ class ExchangeRateDetailView(generics.RetrieveUpdateDestroyAPIView):
         'proposal', 'created_by'
     ).all()
     serializer_class = ExchangeRateSerializer
-    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+    permission_classes = [permissions.IsAuthenticated, IsAtLeastJuniorManager]
+    
+    def get_permissions(self):
+        if self.request.method in permissions.SAFE_METHODS:
+            return [permissions.IsAuthenticated(), IsAtLeastJuniorManager()]
+        return [permissions.IsAuthenticated(), IsManagerOrAdmin()]
     lookup_field = 'rate_id'
 
 
@@ -2184,7 +2413,12 @@ class CostCalculationCalculateView(generics.CreateAPIView):
     POST /api/cost-calculations/calculate/ - Calculate equipment cost
     """
     serializer_class = CostCalculationRequestSerializer
-    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+    permission_classes = [permissions.IsAuthenticated, IsAtLeastJuniorManager]
+    
+    def get_permissions(self):
+        if self.request.method in permissions.SAFE_METHODS:
+            return [permissions.IsAuthenticated(), IsAtLeastJuniorManager()]
+        return [permissions.IsAuthenticated(), IsManagerOrAdmin()]
     
     def create(self, request, *args, **kwargs):
         """Calculate equipment cost and optionally save it."""
@@ -2278,7 +2512,12 @@ class CostCalculationListView(generics.ListAPIView):
         'equipment', 'proposal', 'created_by'
     ).all()
     serializer_class = CostCalculationSerializer
-    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+    permission_classes = [permissions.IsAuthenticated, IsAtLeastJuniorManager]
+    
+    def get_permissions(self):
+        if self.request.method in permissions.SAFE_METHODS:
+            return [permissions.IsAuthenticated(), IsAtLeastJuniorManager()]
+        return [permissions.IsAuthenticated(), IsManagerOrAdmin()]
     
     def get_queryset(self):
         """Return all cost calculations, optionally filtered."""
@@ -2336,7 +2575,12 @@ class CostCalculationDetailView(generics.RetrieveDestroyAPIView):
         'equipment', 'proposal', 'created_by'
     ).all()
     serializer_class = CostCalculationSerializer
-    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+    permission_classes = [permissions.IsAuthenticated, IsAtLeastJuniorManager]
+    
+    def get_permissions(self):
+        if self.request.method in permissions.SAFE_METHODS:
+            return [permissions.IsAuthenticated(), IsAtLeastJuniorManager()]
+        return [permissions.IsAuthenticated(), IsManagerOrAdmin()]
     lookup_field = 'calculation_id'
 
 
@@ -2347,7 +2591,12 @@ class CostCalculationEquipmentHistoryView(generics.ListAPIView):
     GET /api/cost-calculations/equipment/{equipment_id}/history/ - Get calculation history for equipment
     """
     serializer_class = CostCalculationSerializer
-    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+    permission_classes = [permissions.IsAuthenticated, IsAtLeastJuniorManager]
+    
+    def get_permissions(self):
+        if self.request.method in permissions.SAFE_METHODS:
+            return [permissions.IsAuthenticated(), IsAtLeastJuniorManager()]
+        return [permissions.IsAuthenticated(), IsManagerOrAdmin()]
     
     def get_queryset(self):
         """Return calculation history for specific equipment."""
@@ -2958,7 +3207,12 @@ class SystemSettingsLogoView(APIView):
     GET /api/system-settings/logo/
     POST /api/system-settings/logo/
     """
-    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+    permission_classes = [permissions.IsAuthenticated, IsAtLeastJuniorManager]
+    
+    def get_permissions(self):
+        if self.request.method in permissions.SAFE_METHODS:
+            return [permissions.IsAuthenticated(), IsAtLeastJuniorManager()]
+        return [permissions.IsAuthenticated(), IsManagerOrAdmin()]
     
     def get(self, request, *args, **kwargs):
         settings = SystemSettings.get_settings()
@@ -3092,7 +3346,12 @@ class EquipmentSatuExportView(APIView):
     """
     POST /api/satu/equipment/<id>/export/ - Export single equipment to Satu.
     """
-    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+    permission_classes = [permissions.IsAuthenticated, IsAtLeastJuniorManager]
+    
+    def get_permissions(self):
+        if self.request.method in permissions.SAFE_METHODS:
+            return [permissions.IsAuthenticated(), IsAtLeastJuniorManager()]
+        return [permissions.IsAuthenticated(), IsManagerOrAdmin()]
 
     def post(self, request, equipment_id, *args, **kwargs):
         try:
@@ -3109,7 +3368,12 @@ class EquipmentSatuBulkExportView(APIView):
     """
     POST /api/satu/equipment/export-bulk/ - Export multiple (all published) equipment to Satu.
     """
-    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+    permission_classes = [permissions.IsAuthenticated, IsAtLeastJuniorManager]
+    
+    def get_permissions(self):
+        if self.request.method in permissions.SAFE_METHODS:
+            return [permissions.IsAuthenticated(), IsAtLeastJuniorManager()]
+        return [permissions.IsAuthenticated(), IsManagerOrAdmin()]
 
     def post(self, request, *args, **kwargs):
         equipment_list = list(Equipment.objects.filter(is_published=True))
@@ -3136,7 +3400,12 @@ class BitrixSearchView(APIView):
     type: name (company title), contact (contact name/phone), requisite (IIN/BIN), deal (название сделки).
     q: search query (min 3 chars). Uses saved bitrix_webhook_url.
     """
-    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+    permission_classes = [permissions.IsAuthenticated, IsAtLeastJuniorManager]
+    
+    def get_permissions(self):
+        if self.request.method in permissions.SAFE_METHODS:
+            return [permissions.IsAuthenticated(), IsAtLeastJuniorManager()]
+        return [permissions.IsAuthenticated(), IsManagerOrAdmin()]
 
     def get(self, request, *args, **kwargs):
         search_type = (request.query_params.get('type') or 'name').strip().lower()
@@ -3168,7 +3437,12 @@ class CrmDealListView(generics.ListAPIView):
     """
     queryset = CrmDeal.objects.all().select_related('client').prefetch_related('commercial_proposals')
     serializer_class = CrmDealSerializer
-    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+    permission_classes = [permissions.IsAuthenticated, IsAtLeastJuniorManager]
+    
+    def get_permissions(self):
+        if self.request.method in permissions.SAFE_METHODS:
+            return [permissions.IsAuthenticated(), IsAtLeastJuniorManager()]
+        return [permissions.IsAuthenticated(), IsManagerOrAdmin()]
 
 
 class CrmDealDetailView(generics.RetrieveAPIView):
@@ -3177,7 +3451,12 @@ class CrmDealDetailView(generics.RetrieveAPIView):
     """
     queryset = CrmDeal.objects.all().select_related('client').prefetch_related('commercial_proposals')
     serializer_class = CrmDealSerializer
-    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+    permission_classes = [permissions.IsAuthenticated, IsAtLeastJuniorManager]
+    
+    def get_permissions(self):
+        if self.request.method in permissions.SAFE_METHODS:
+            return [permissions.IsAuthenticated(), IsAtLeastJuniorManager()]
+        return [permissions.IsAuthenticated(), IsManagerOrAdmin()]
 
 
 def _import_company_from_bitrix(webhook_url, bitrix_id):
@@ -3250,7 +3529,12 @@ class BitrixSelectDealView(APIView):
     optionally import company and link to deal. Returns { deal_id, client_id?, deal_title }.
     Body: { "bitrix_deal_id": 456 }.
     """
-    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+    permission_classes = [permissions.IsAuthenticated, IsAtLeastJuniorManager]
+    
+    def get_permissions(self):
+        if self.request.method in permissions.SAFE_METHODS:
+            return [permissions.IsAuthenticated(), IsAtLeastJuniorManager()]
+        return [permissions.IsAuthenticated(), IsManagerOrAdmin()]
 
     def post(self, request, *args, **kwargs):
         bitrix_deal_id = request.data.get('bitrix_deal_id')
@@ -3340,7 +3624,12 @@ class BitrixImportClientView(APIView):
     Body: { "bitrix_id": 123 } — ID компании, или { "bitrix_deal_id": 456 } — ID сделки (импорт компании сделки).
     Creates or updates local Client, returns { "client_id": ... }.
     """
-    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+    permission_classes = [permissions.IsAuthenticated, IsAtLeastJuniorManager]
+    
+    def get_permissions(self):
+        if self.request.method in permissions.SAFE_METHODS:
+            return [permissions.IsAuthenticated(), IsAtLeastJuniorManager()]
+        return [permissions.IsAuthenticated(), IsManagerOrAdmin()]
 
     def post(self, request, *args, **kwargs):
         bitrix_id = request.data.get('bitrix_id')

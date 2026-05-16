@@ -57,6 +57,7 @@ class User(AbstractBaseUser, PermissionsMixin):
                                  choices=[
                                      ('Администратор', 'Администратор'),
                                      ('Менеджер', 'Менеджер'),
+                                     ('Младший менеджер', 'Младший менеджер'),
                                      ('Просмотр', 'Просмотр'),
                                  ])
     is_active = models.BooleanField(default=True, verbose_name='Активен')
@@ -1164,6 +1165,55 @@ class SectionTemplate(models.Model):
 
     def __str__(self):
         return f"{self.title} ({self.name})"
+
+class ProposalAdjustment(models.Model):
+    """Model for storing markups and discounts for a specific commercial proposal."""
+    ADJUSTMENT_TYPES = [
+        ('markup', 'Надбавка'),
+        ('discount', 'Скидка'),
+    ]
+    
+    proposal = models.ForeignKey(
+        'CommercialProposal',
+        on_delete=models.CASCADE,
+        related_name='adjustments',
+        db_column='proposal_id',
+        verbose_name='Коммерческое предложение'
+    )
+    adjustment_type = models.CharField(
+        max_length=10,
+        choices=ADJUSTMENT_TYPES,
+        verbose_name='Тип'
+    )
+    value_percentage = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        verbose_name='Значение (%)'
+    )
+    comments = models.TextField(
+        null=True,
+        blank=True,
+        verbose_name='Комментарии'
+    )
+    created_by = models.ForeignKey(
+        'User',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='created_adjustments',
+        db_column='created_by_user_id',
+        verbose_name='Автор'
+    )
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='Дата создания')
+
+    class Meta:
+        db_table = 'proposal_adjustment'
+        verbose_name = 'Надбавка/Скидка КП'
+        verbose_name_plural = 'Надбавки/Скидки КП'
+        ordering = ['created_at']
+
+    def __str__(self):
+        return f"{self.get_adjustment_type_display()} {self.value_percentage}% for CP {self.proposal_id}"
 
 class SystemSettings(models.Model):
     """

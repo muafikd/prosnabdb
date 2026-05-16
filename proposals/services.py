@@ -944,8 +944,8 @@ class DataAggregatorService:
                 if isinstance(rate, dict):
                     # Try different keys that might be used
                     curr = rate.get('currency_from') or rate.get('currency')
-                    val = rate.get('rate_value') or rate.get('value')
-                    if curr and val:
+                    val = rate.get('rate_value') or rate.get('value') or rate.get('internal_rate')
+                    if curr and val is not None:
                         self.rates_map[curr] = Decimal(str(val))
         
         # Ensure proposal exchange rate is also available
@@ -956,12 +956,27 @@ class DataAggregatorService:
         # Add pivot currency
         self.rates_map['KZT'] = Decimal('1.0')
 
+        # Fetch adjustments and calculate net percentage
+        self.adjustments = self.proposal.adjustments.all()
+        self.net_adjustment_percentage = Decimal('0')
+        for adj in self.adjustments:
+            val = Decimal(str(adj.value_percentage))
+            if adj.adjustment_type == 'markup':
+                self.net_adjustment_percentage += val
+            else:
+                self.net_adjustment_percentage -= val
+
     def get_full_data_package(self):
         """
         Main entry point. Returns a dictionary with all necessary data.
         """
         # Calculate equipment list first as it drives the core pricing
         equipment_list_data = self._calculate_and_build_equipment_list()
+        
+        # Now calculate adjustment values
+        adjustment_value_kzt = self.total_adjusted_sale_price_sum - self.total_raw_sale_price_sum
+        self.adjustment_value_target = self._convert_currency(adjustment_value_kzt, 'KZT', self.currency)
+        self.adjustment_value_kzt = adjustment_value_kzt
         
         # Calculate total margin from all equipment items
         total_margin_kzt = Decimal('0')
@@ -1006,8 +1021,9 @@ class DataAggregatorService:
             "equipment_details": self._get_equipment_details(),
             "equipment_specifications": self._get_equipment_specifications(),
             "tech_processes": self._get_tech_processes(),
-            "additional_services": self.proposal.additional_services,
+            "additional_services": self._get_additional_services(),
             "company_logo_url": self._get_company_logo_url(),
+            "adjustments": self._get_adjustment_data(),
         }
 
     def _get_company_logo_url(self):
@@ -1099,7 +1115,23 @@ class DataAggregatorService:
             "name": user.user_name,
             "email": user.user_email,
             "phone": user.user_phone,
-            "role": user.user_role,
+        }
+
+    def _get_adjustment_data(self):
+        """Return information about markups/discounts."""
+        return {
+            "net_percentage": float(self.net_adjustment_percentage),
+            "value_kzt": float(self.adjustment_value_kzt),
+            "value_target": float(self.adjustment_value_target),
+            "type": "markup" if self.net_adjustment_percentage >= 0 else "discount",
+            "items": [
+                {
+                    "type": adj.adjustment_type,
+                    "value": float(adj.value_percentage),
+                    "comments": adj.comments,
+                    "author": adj.created_by.user_name if adj.created_by else "System"
+                } for adj in self.adjustments
+            ]
         }
 
     def _calculate_and_build_equipment_list(self):
@@ -1115,6 +1147,7 @@ class DataAggregatorService:
         items_meta = []
         total_base_cost_sum = Decimal('0')
         total_sale_price_sum = Decimal('0')
+        total_raw_sale_price_sum = Decimal('0')
         
         # Step 1: Collect all equipment items and calculate base costs
         for eq_list in self.proposal.equipment_lists.all():
@@ -1147,11 +1180,11 @@ class DataAggregatorService:
                     if purchase_price_obj and purchase_price_obj.price:
                         price_val = Decimal(str(purchase_price_obj.price))
                         price_curr = purchase_price_obj.currency
-                        base_unit_cost = self._convert_currency(price_val, price_curr, self.currency)
+                        base_unit_cost = self._convert_currency(price_val, price_curr, 'KZT')
                     elif equipment.equipment_manufacture_price:
                         price_val = Decimal(str(equipment.equipment_manufacture_price))
                         price_curr = equipment.equipment_price_currency_type or 'KZT'
-                        base_unit_cost = self._convert_currency(price_val, price_curr, self.currency)
+                        base_unit_cost = self._convert_currency(price_val, price_curr, 'KZT')
                     
                     # Add row expenses
                     row_expenses_sum = Decimal('0')
@@ -1160,7 +1193,7 @@ class DataAggregatorService:
                             val = exp.get('value')
                             curr = exp.get('currency', 'KZT')
                             if val:
-                                row_expenses_sum += self._convert_currency(Decimal(str(val)), curr, self.currency)
+                                row_expenses_sum += self._convert_currency(Decimal(str(val)), curr, 'KZT')
                     
                     if quantity > 0:
                         base_unit_cost += (row_expenses_sum / quantity)
@@ -1168,6 +1201,17 @@ class DataAggregatorService:
                     # Use calculated price as sale price (old behavior)
                     sale_price_kzt = base_unit_cost
                 
+                # Capture raw price for adjustment calculation
+                raw_sale_price_kzt = sale_price_kzt
+                
+                # Round RAW line total to integer
+                line_raw_total = (raw_sale_price_kzt * quantity).quantize(Decimal('1'), rounding=ROUND_HALF_UP)
+                total_raw_sale_price_sum += line_raw_total
+
+                # Apply Proposal Adjustments (Markups/Discounts) to the sale price
+                if self.net_adjustment_percentage != 0:
+                    sale_price_kzt = raw_sale_price_kzt * (Decimal('1') + self.net_adjustment_percentage / Decimal('100'))
+
                 # Use saved calculated_data if available, otherwise calculate
                 if has_saved_data:
                     # Use saved values from calculated_data (safely convert to Decimal)
@@ -1225,8 +1269,12 @@ class DataAggregatorService:
                         price_curr = equipment.equipment_price_currency_type or 'KZT'
                         purchase_price_kzt_for_save = self._convert_currency(price_val, price_curr, 'KZT')
                 
+                # Calculate adjusted totals
+                # The frontend rounds the LINE total: Math.round(unit * (1+adj) * qty)
+                # Let's match that.
+                line_sale_total = (sale_price_kzt * quantity).quantize(Decimal('1'), rounding=ROUND_HALF_UP)
+                
                 line_base_total = base_unit_cost_kzt * quantity
-                line_sale_total = sale_price_kzt * quantity
                 
                 total_base_cost_sum += line_base_total
                 total_sale_price_sum += line_sale_total
@@ -1263,25 +1311,26 @@ class DataAggregatorService:
                         percentage_value = (Decimal(str(add_price.price_parameter_value)) / Decimal('100')) * total_base_cost_sum
                         global_overhead += percentage_value
         
-        # Calculate services sum (additional_services are separate, not part of overhead)
+        # Calculate services sum
         services_sum = Decimal('0')
         if self.proposal.additional_services:
             for svc in self.proposal.additional_services:
                 price = svc.get('price')
                 if price:
-                    services_sum += Decimal(str(price))
+                    # Round each service price to integer
+                    services_sum += Decimal(str(price)).quantize(Decimal('1'), rounding=ROUND_HALF_UP)
         
-        # Calculate total price: sum of sale prices + services
-        # (overhead is already included in margin calculation, not in total price)
-        calculated_total = total_sale_price_sum + services_sum
+        # Calculate total price: sum of rounded sale prices + rounded services
+        # We always recalculate this to ensure consistency with the new rounding rules
+        calculated_total_kzt = total_sale_price_sum + services_sum
         
-        # If proposal.total_price is set, use it; otherwise calculate from sale prices
-        if self.proposal.total_price:
-            target_total = Decimal(str(self.proposal.total_price))
-        else:
-            target_total = calculated_total
-            # Update proposal total_price
+        # Convert total to target currency and round
+        target_total = self._convert_currency(calculated_total_kzt, 'KZT', self.currency).quantize(Decimal('1'), rounding=ROUND_HALF_UP)
+        
+        # Update proposal total_price if it's different (to sync legacy data)
+        if not self.proposal.total_price or abs(Decimal(str(self.proposal.total_price)) - target_total) > 0.01:
             self.proposal.total_price = target_total
+            self.proposal.save(update_fields=['total_price'])
         
         # Step 3: Distribute Overhead and Calculate Margins
         final_items = []
@@ -1356,8 +1405,15 @@ class DataAggregatorService:
             # Total margin for the line
             margin_kzt_total = margin_kzt_per_unit * quantity
             
+            # ROUND sale_price_kzt to nearest whole number
+            sale_price_kzt = sale_price_kzt.quantize(Decimal('1'), rounding=ROUND_HALF_UP)
+            
+            # Convert sale_price to target currency and ROUND to nearest whole number
+            sale_price_target = self._convert_currency(sale_price_kzt, 'KZT', self.currency)
+            sale_price_target = sale_price_target.quantize(Decimal('1'), rounding=ROUND_HALF_UP)
+
             # Final prices (sale_price_kzt is fixed, used as price_per_unit)
-            # All values are already in KZT at this point
+            # Note: base_cost_kzt and margins are kept in KZT for internal analysis
             final_items.append({
                 "equipment_id": equipment.equipment_id,
                 "name": equipment.equipment_name,
@@ -1365,8 +1421,8 @@ class DataAggregatorService:
                 "article": equipment.equipment_articule,
                 "quantity": int(quantity),
                 "unit": equipment.equipment_uom or 'шт',
-                "price_per_unit": float(sale_price_kzt),  # Fixed sale price (in KZT)
-                "total_price": float(sale_price_kzt * quantity),  # Fixed sale price * quantity (in KZT)
+                "price_per_unit": float(sale_price_target),  # Fixed sale price in target currency
+                "total_price": float(sale_price_target * quantity),  # Fixed sale price * quantity in target currency
                 "base_cost_kzt": float(base_unit_cost_kzt),  # Purchase price + row expenses (in KZT)
                 "allocated_overhead_per_unit": float(allocated_overhead_per_unit),  # Distributed overhead (in KZT) or saved value
                 "margin_kzt": float(margin_kzt_per_unit),  # Margin per unit (in KZT) or saved value
@@ -1376,7 +1432,36 @@ class DataAggregatorService:
                 "images": self._process_images_for_equipment(equipment)
             })
         
+        # Save totals for metadata
+        self.total_raw_sale_price_sum = total_raw_sale_price_sum
+        self.total_adjusted_sale_price_sum = total_sale_price_sum
+
         return final_items
+
+    def _get_additional_services(self):
+        """
+        Returns additional services with prices converted to the target currency and rounded.
+        """
+        services = self.proposal.additional_services or []
+        if self.currency == 'KZT' or not services:
+            # Even if KZT, ensure they are rounded to integers for consistency
+            rounded_services = []
+            for svc in services:
+                new_svc = svc.copy()
+                price = Decimal(str(svc.get('price', 0)))
+                new_svc['price'] = float(price.quantize(Decimal('1'), rounding=ROUND_HALF_UP))
+                rounded_services.append(new_svc)
+            return rounded_services
+            
+        converted_services = []
+        for svc in services:
+            new_svc = svc.copy()
+            price_kzt = Decimal(str(svc.get('price', 0)))
+            # Convert and round to integer
+            price_target = self._convert_currency(price_kzt, 'KZT', self.currency).quantize(Decimal('1'), rounding=ROUND_HALF_UP)
+            new_svc['price'] = float(price_target)
+            converted_services.append(new_svc)
+        return converted_services
 
     def _convert_currency(self, amount, from_curr, to_curr):
         if from_curr == to_curr:

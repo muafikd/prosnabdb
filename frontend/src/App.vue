@@ -30,31 +30,31 @@
               <span>Dashboard</span>
             </template>
           </el-menu-item>
-          <el-menu-item index="/equipment" v-if="authStore.isManager">
+          <el-menu-item index="/equipment" v-if="authStore.isAtLeastJuniorManager">
             <el-icon><Box /></el-icon>
             <template #title>
               <span>Оборудование</span>
             </template>
           </el-menu-item>
-          <el-menu-item index="/clients" v-if="authStore.isManager">
+          <el-menu-item index="/clients" v-if="authStore.isAtLeastJuniorManager">
             <el-icon><User /></el-icon>
             <template #title>
               <span>Клиенты</span>
             </template>
           </el-menu-item>
-          <el-menu-item index="/deals" v-if="authStore.isManager">
+          <el-menu-item index="/deals" v-if="authStore.isAtLeastJuniorManager">
             <el-icon><Document /></el-icon>
             <template #title>
               <span>Сделки Bitrix</span>
             </template>
           </el-menu-item>
-          <el-menu-item index="/manufacturers" v-if="authStore.isManager">
+          <el-menu-item index="/manufacturers" v-if="authStore.isAtLeastJuniorManager">
             <el-icon><OfficeBuilding /></el-icon>
             <template #title>
               <span>Производители</span>
             </template>
           </el-menu-item>
-          <el-menu-item index="/proposals" v-if="authStore.isManager">
+          <el-menu-item index="/proposals" v-if="authStore.isAtLeastJuniorManager">
             <el-icon><Document /></el-icon>
             <template #title>
               <span>КП</span>

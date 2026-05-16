@@ -55,15 +55,15 @@ const currency = computed(() => props.dataPackage?.proposal?.currency || '')
 // Calculate total sum for equipment only
 const totalEquipmentSum = computed(() => {
   return items.value.reduce((sum, item) => {
-    return sum + (parseFloat(item.total_price) || 0)
+    return sum + Math.round(parseFloat(item.total_price) || 0)
   }, 0)
 })
 
 const formatPrice = (value: number) => {
   return new Intl.NumberFormat('ru-RU', {
     style: 'decimal',
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0
   }).format(value)
 }
 

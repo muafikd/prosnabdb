@@ -82,8 +82,8 @@ const formatPrice = (value: number | string, currency: string) => {
   const num = Number(value)
   return new Intl.NumberFormat('ru-RU', {
     style: 'decimal',
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0
   }).format(num) + ' ' + currency
 }
 </script>
