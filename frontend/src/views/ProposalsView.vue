@@ -2527,10 +2527,26 @@ const handleSubmit = async () => {
                 console.error(e)
                 let msg = e.message
                 if (e.response?.data) {
+                    const formatError = (errorData: any): string => {
+                        if (typeof errorData === 'string') {
+                            return errorData
+                        }
+                        if (Array.isArray(errorData)) {
+                            return errorData.map(item => typeof item === 'object' ? formatError(item) : item).join(', ')
+                        }
+                        if (typeof errorData === 'object' && errorData !== null) {
+                            return Object.entries(errorData)
+                                .map(([key, val]) => {
+                                    const formattedVal = typeof val === 'object' ? formatError(val) : val
+                                    return `${key}: ${formattedVal}`
+                                })
+                                .join('; ')
+                        }
+                        return String(errorData)
+                    }
+                    
                     if (typeof e.response.data === 'object') {
-                        msg = Object.entries(e.response.data)
-                            .map(([key, val]) => `${key}: ${Array.isArray(val) ? val.join(', ') : val}`)
-                            .join('; ')
+                        msg = formatError(e.response.data)
                     } else {
                         msg = JSON.stringify(e.response.data)
                     }

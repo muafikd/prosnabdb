@@ -773,7 +773,7 @@ class ProposalAdjustmentSerializer(serializers.ModelSerializer):
             'id', 'proposal', 'adjustment_type', 'value_percentage',
             'comments', 'created_by', 'author_name', 'created_at'
         ]
-        read_only_fields = ['id', 'created_by', 'author_name', 'created_at']
+        read_only_fields = ['id', 'proposal', 'created_by', 'author_name', 'created_at']
 
 
 class PaymentLogSerializer(serializers.ModelSerializer):
