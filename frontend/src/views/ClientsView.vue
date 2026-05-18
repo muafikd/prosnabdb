@@ -71,6 +71,7 @@
               circle
             />
             <el-button
+              v-if="authStore.isManager"
               type="danger"
               size="small"
               :icon="Delete"
@@ -189,6 +190,9 @@ import { Plus, Edit, Delete, Search, Link } from '@element-plus/icons-vue'
 import { clientsAPI, type Client, type ClientCreateData } from '@/api/clients'
 import { bitrixAPI } from '@/api/bitrix'
 import { format } from 'date-fns'
+import { useAuthStore } from '@/stores/auth'
+
+const authStore = useAuthStore()
 
 // State
 const loading = ref(false)

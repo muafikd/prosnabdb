@@ -217,9 +217,7 @@ class ClientListView(generics.ListCreateAPIView):
     permission_classes = [permissions.IsAuthenticated, IsAtLeastJuniorManager]
     
     def get_permissions(self):
-        if self.request.method in permissions.SAFE_METHODS:
-            return [permissions.IsAuthenticated(), IsAtLeastJuniorManager()]
-        return [permissions.IsAuthenticated(), IsManagerOrAdmin()]
+        return [permissions.IsAuthenticated(), IsAtLeastJuniorManager()]
     
     def get_queryset(self):
         """Return all clients, optionally filtered by search (имя клиента или название компании)."""
@@ -246,9 +244,9 @@ class ClientDetailView(generics.RetrieveUpdateDestroyAPIView):
     permission_classes = [permissions.IsAuthenticated, IsAtLeastJuniorManager]
     
     def get_permissions(self):
-        if self.request.method in permissions.SAFE_METHODS:
-            return [permissions.IsAuthenticated(), IsAtLeastJuniorManager()]
-        return [permissions.IsAuthenticated(), IsManagerOrAdmin()]
+        if self.request.method == 'DELETE':
+            return [permissions.IsAuthenticated(), IsManagerOrAdmin()]
+        return [permissions.IsAuthenticated(), IsAtLeastJuniorManager()]
     lookup_field = 'client_id'
 
 
@@ -3401,11 +3399,6 @@ class BitrixSearchView(APIView):
     q: search query (min 3 chars). Uses saved bitrix_webhook_url.
     """
     permission_classes = [permissions.IsAuthenticated, IsAtLeastJuniorManager]
-    
-    def get_permissions(self):
-        if self.request.method in permissions.SAFE_METHODS:
-            return [permissions.IsAuthenticated(), IsAtLeastJuniorManager()]
-        return [permissions.IsAuthenticated(), IsManagerOrAdmin()]
 
     def get(self, request, *args, **kwargs):
         search_type = (request.query_params.get('type') or 'name').strip().lower()
@@ -3530,11 +3523,6 @@ class BitrixSelectDealView(APIView):
     Body: { "bitrix_deal_id": 456 }.
     """
     permission_classes = [permissions.IsAuthenticated, IsAtLeastJuniorManager]
-    
-    def get_permissions(self):
-        if self.request.method in permissions.SAFE_METHODS:
-            return [permissions.IsAuthenticated(), IsAtLeastJuniorManager()]
-        return [permissions.IsAuthenticated(), IsManagerOrAdmin()]
 
     def post(self, request, *args, **kwargs):
         bitrix_deal_id = request.data.get('bitrix_deal_id')
@@ -3625,11 +3613,6 @@ class BitrixImportClientView(APIView):
     Creates or updates local Client, returns { "client_id": ... }.
     """
     permission_classes = [permissions.IsAuthenticated, IsAtLeastJuniorManager]
-    
-    def get_permissions(self):
-        if self.request.method in permissions.SAFE_METHODS:
-            return [permissions.IsAuthenticated(), IsAtLeastJuniorManager()]
-        return [permissions.IsAuthenticated(), IsManagerOrAdmin()]
 
     def post(self, request, *args, **kwargs):
         bitrix_id = request.data.get('bitrix_id')
