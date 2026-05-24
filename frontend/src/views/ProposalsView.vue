@@ -388,7 +388,7 @@
             style="width: 100%; margin-top: 20px"
             row-key="equipment_id"
           >
-            <el-table-column label="Порядок" width="100" align="center">
+            <el-table-column label="Порядок" width="80" align="center">
               <template #default="{ $index }">
                 <el-button
                   type="text"
@@ -407,6 +407,35 @@
                   @click="moveEquipmentDown($index)"
                   circle
                   title="Вниз"
+                />
+              </template>
+            </el-table-column>
+            <el-table-column label="Действия" width="140" align="center">
+              <template #default="{ row, $index }">
+                <el-tooltip content="Просмотр карточки оборудования">
+                  <el-button
+                    type="info"
+                    size="small"
+                    :icon="View"
+                    circle
+                    @click="openEquipmentCardDialog(row.equipment_id)"
+                  />
+                </el-tooltip>
+                <el-tooltip content="Добавить расход">
+                   <el-button
+                    type="primary"
+                    size="small"
+                    :icon="Plus"
+                    circle
+                    @click="openRowExpenseDialog(row)"
+                  />
+                </el-tooltip>
+                <el-button
+                  type="danger"
+                  size="small"
+                  :icon="Delete"
+                  circle
+                  @click="removeEquipment($index)"
                 />
               </template>
             </el-table-column>
@@ -492,35 +521,6 @@
                   </div>
                 </div>
                 <span v-else class="text-gray-400">Нет расходов</span>
-              </template>
-            </el-table-column>
-            <el-table-column label="Действия" width="200" align="center">
-              <template #default="{ row, $index }">
-                <el-tooltip content="Просмотр карточки оборудования">
-                  <el-button
-                    type="info"
-                    size="small"
-                    :icon="View"
-                    circle
-                    @click="openEquipmentCardDialog(row.equipment_id)"
-                  />
-                </el-tooltip>
-                <el-tooltip content="Добавить расход">
-                   <el-button
-                    type="primary"
-                    size="small"
-                    :icon="Plus"
-                    circle
-                    @click="openRowExpenseDialog(row)"
-                  />
-                </el-tooltip>
-                <el-button
-                  type="danger"
-                  size="small"
-                  :icon="Delete"
-                  circle
-                  @click="removeEquipment($index)"
-                />
               </template>
             </el-table-column>
           </el-table>
