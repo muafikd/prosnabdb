@@ -383,31 +383,15 @@
           </div>
 
           <el-table 
+            ref="equipmentTableRef"
             :data="selectedEquipment" 
             border 
             style="width: 100%; margin-top: 20px"
             row-key="equipment_id"
           >
             <el-table-column label="Порядок" width="80" align="center">
-              <template #default="{ $index }">
-                <el-button
-                  type="text"
-                  size="small"
-                  :icon="ArrowUp"
-                  :disabled="$index === 0"
-                  @click="moveEquipmentUp($index)"
-                  circle
-                  title="Вверх"
-                />
-                <el-button
-                  type="text"
-                  size="small"
-                  :icon="ArrowDown"
-                  :disabled="$index === selectedEquipment.length - 1"
-                  @click="moveEquipmentDown($index)"
-                  circle
-                  title="Вниз"
-                />
+              <template #default>
+                <el-icon class="drag-handle" style="cursor: grab; font-size: 20px;"><Rank /></el-icon>
               </template>
             </el-table-column>
             <el-table-column label="Действия" width="140" align="center">
@@ -1212,7 +1196,8 @@ import { useRouter, useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import axios from 'axios'
 import Cookies from 'js-cookie'
-import { Plus, Edit, Delete, Search, Coin, Setting, DocumentCopy, DataBoard, ArrowUp, ArrowDown, Refresh, View, Loading, Picture, Download } from '@element-plus/icons-vue'
+import { Plus, Edit, Delete, Search, Coin, Setting, DocumentCopy, DataBoard, ArrowUp, ArrowDown, Refresh, View, Loading, Picture, Download, Rank } from '@element-plus/icons-vue'
+import Sortable from 'sortablejs'
 import {
   proposalsAPI,
   type CommercialProposal,
@@ -1323,6 +1308,40 @@ const isEditMode = ref(false)
 const activeTab = ref('basic')
 const submitting = ref(false)
 const bitrixSearchVisible = ref(false)
+
+const equipmentTableRef = ref()
+let sortableInstance: Sortable | null = null
+
+const initSortable = () => {
+    if (!equipmentTableRef.value) return
+    const el = equipmentTableRef.value.$el.querySelector('.el-table__body-wrapper tbody')
+    if (!el) return
+    
+    if (sortableInstance) {
+        sortableInstance.destroy()
+    }
+    
+    sortableInstance = Sortable.create(el, {
+        handle: '.drag-handle',
+        animation: 150,
+        onEnd: (evt: any) => {
+            const oldIndex = evt.oldIndex
+            const newIndex = evt.newIndex
+            if (oldIndex !== undefined && newIndex !== undefined) {
+                const item = selectedEquipment.value.splice(oldIndex, 1)[0]
+                selectedEquipment.value.splice(newIndex, 0, item)
+            }
+        }
+    })
+}
+
+watch([dialogVisible, activeTab], ([newDialogVisible, newActiveTab]) => {
+    if (newDialogVisible && newActiveTab === 'equipment') {
+        nextTick(() => {
+            initSortable()
+        })
+    }
+})
 
 // Equipment card dialog state
 const equipmentCardDialogVisible = ref(false)
