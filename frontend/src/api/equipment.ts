@@ -119,6 +119,26 @@ export const equipmentAPI = {
   async deleteEquipment(equipmentId: number): Promise<void> {
     await apiClient.delete(`/equipment/${equipmentId}/`)
   },
+
+  // Экспорт каталога оборудования в Excel
+  async exportToExcel(params?: { search?: string; category_id?: number; manufacturer_id?: number; is_published?: boolean }): Promise<Blob> {
+    const response: AxiosResponse<Blob> = await apiClient.get('/equipment/export-excel/', {
+      params,
+      responseType: 'blob'
+    })
+    return response.data
+  },
+
+  // Экспорт оборудования конкретного КП в Excel
+  async exportProposalEquipmentToExcel(equipmentItems: any[], netAdjustmentPercentage: number): Promise<Blob> {
+    const response: AxiosResponse<Blob> = await apiClient.post('/equipment/export-proposal-excel/', {
+      equipment_items: equipmentItems,
+      net_adjustment_percentage: netAdjustmentPercentage
+    }, {
+      responseType: 'blob'
+    })
+    return response.data
+  },
 }
 
 // API функции для связанных моделей

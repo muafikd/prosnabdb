@@ -55,6 +55,8 @@ urlpatterns = [
     path('equipment-tech-processes/<int:tech_id>/', views.EquipmentTechProcessDetailView.as_view(), name='equipment-tech-process-detail'),
     
     # Equipment CRUD endpoints
+    path('equipment/export-excel/', views.EquipmentExcelExportView.as_view(), name='equipment-export-excel'),
+    path('equipment/export-proposal-excel/', views.EquipmentProposalExcelExportView.as_view(), name='equipment-proposal-export-excel'),
     path('equipment/', views.EquipmentListView.as_view(), name='equipment-list'),
     path('equipment/<int:equipment_id>/', views.EquipmentDetailView.as_view(), name='equipment-detail'),
     

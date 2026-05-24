@@ -3983,3 +3983,287 @@ class DashboardActiveProposalsView(APIView):
             })
         
         return Response(proposals_list, status=status.HTTP_200_OK)
+
+
+class EquipmentExcelExportView(APIView):
+    permission_classes = [permissions.IsAuthenticated, IsAtLeastJuniorManager]
+
+    def get(self, request, *args, **kwargs):
+        import openpyxl
+        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+        from openpyxl.utils import get_column_letter
+        from django.http import HttpResponse
+
+        # Optional search by equipment name or articule
+        queryset = Equipment.objects.prefetch_related(
+            'categories', 'manufacturers', 'equipment_types',
+            'details', 'specifications', 'tech_processes', 'photos'
+        ).all()
+        
+        search = self.request.query_params.get('search', None)
+        if search:
+            queryset = queryset.filter(
+                equipment_name__icontains=search
+            ) | queryset.filter(
+                equipment_articule__icontains=search
+            )
+        
+        category_id = self.request.query_params.get('category_id', None)
+        if category_id:
+            queryset = queryset.filter(categories__category_id=category_id).distinct()
+        
+        manufacturer_id = self.request.query_params.get('manufacturer_id', None)
+        if manufacturer_id:
+            queryset = queryset.filter(manufacturers__manufacturer_id=manufacturer_id).distinct()
+        
+        equipment_type_id = self.request.query_params.get('equipment_type_id', None)
+        if equipment_type_id:
+            queryset = queryset.filter(equipment_types__type_id=equipment_type_id).distinct()
+        
+        is_published = self.request.query_params.get('is_published', None)
+        if is_published is not None:
+            is_published_bool = is_published.lower() == 'true'
+            queryset = queryset.filter(is_published=is_published_bool)
+
+        queryset = queryset.order_by('-created_at')
+
+        is_junior_manager = request.user.user_role == 'Младший менеджер'
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Оборудование"
+
+        # Headers
+        headers = [
+            "ID", "Название", "Артикул", "Ед. изм.", "Цена продажи (KZT)", 
+            "Цена закупки/производства", "Валюта", "Гарантия", "Страна производства", 
+            "Опубликовано", "Категории", "Производители", "Типы оборудования", 
+            "Дата создания", "Краткое описание", "Детали (Характеристики)", "Спецификации", "Тех. процессы"
+        ]
+        
+        header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
+        header_font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+        thin_border = Border(
+            left=Side(style='thin', color='BFBFBF'),
+            right=Side(style='thin', color='BFBFBF'),
+            top=Side(style='thin', color='BFBFBF'),
+            bottom=Side(style='thin', color='BFBFBF')
+        )
+        
+        ws.append(headers)
+        for col_num, header in enumerate(headers, 1):
+            cell = ws.cell(row=1, column=col_num)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            cell.border = thin_border
+        
+        ws.row_dimensions[1].height = 28
+        
+        for row_num, eq in enumerate(queryset, 2):
+            cats = ", ".join([c.category_name for c in eq.categories.all()])
+            manufs = ", ".join([m.manufacturer_name for m in eq.manufacturers.all()])
+            types = ", ".join([t.type_name for t in eq.equipment_types.all()])
+            
+            details_str = "\n".join([f"{d.detail_parameter_name}: {d.detail_parameter_value}" for d in eq.details.all()])
+            specs_str = "\n".join([f"{s.spec_parameter_name}: {s.spec_parameter_value}" for s in eq.specifications.all()])
+            techs_str = "\n".join([
+                f"{t.tech_name}" + (f" ({t.tech_value})" if t.tech_value else "") + (f" - {t.tech_desc}" if t.tech_desc else "")
+                for t in eq.tech_processes.all()
+            ])
+            
+            created_at_str = eq.created_at.strftime("%d.%m.%Y %H:%M") if eq.created_at else ""
+            is_published_str = "Да" if eq.is_published else "Нет"
+            
+            row_data = [
+                eq.equipment_id,
+                eq.equipment_name,
+                eq.equipment_articule or "",
+                eq.equipment_uom or "",
+                float(eq.sale_price_kzt) if eq.sale_price_kzt is not None else "",
+                float(eq.equipment_manufacture_price) if (eq.equipment_manufacture_price is not None and not is_junior_manager) else "",
+                eq.equipment_price_currency_type or "",
+                eq.equipment_warranty or "",
+                eq.equipment_madein_country or "",
+                is_published_str,
+                cats,
+                manufs,
+                types,
+                created_at_str,
+                eq.equipment_short_description or "",
+                details_str,
+                specs_str,
+                techs_str
+            ]
+            
+            ws.append(row_data)
+            ws.row_dimensions[row_num].height = 20
+            
+            for col_num in range(1, len(headers) + 1):
+                cell = ws.cell(row=row_num, column=col_num)
+                cell.border = thin_border
+                cell.font = Font(name="Calibri", size=10)
+                
+                if col_num in [1, 5, 6]:
+                    cell.alignment = Alignment(horizontal="right", vertical="center")
+                    if col_num in [5, 6] and cell.value != "":
+                        cell.number_format = '#,##0.00'
+                elif col_num in [4, 7, 8, 9, 10, 14]:
+                    cell.alignment = Alignment(horizontal="center", vertical="center")
+                else:
+                    cell.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+                    if col_num in [2, 15, 16, 17, 18]:
+                        val_str = str(cell.value or '')
+                        lines_count = val_str.count('\n') + 1
+                        if lines_count > 1:
+                            current_height = ws.row_dimensions[row_num].height or 20
+                            ws.row_dimensions[row_num].height = max(current_height, lines_count * 15)
+
+        for col in ws.columns:
+            max_len = 0
+            col_letter = get_column_letter(col[0].column)
+            for cell in col:
+                val = cell.value
+                if val is not None:
+                    lines = str(val).split('\n')
+                    max_len = max(max_len, max(len(l) for l in lines))
+            ws.column_dimensions[col_letter].width = max(max_len + 3, 10)
+            if ws.column_dimensions[col_letter].width > 50:
+                ws.column_dimensions[col_letter].width = 50
+
+        response = HttpResponse(
+            content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+        response["Content-Disposition"] = 'attachment; filename="equipment_export.xlsx"'
+        wb.save(response)
+        return response
+
+
+class EquipmentProposalExcelExportView(APIView):
+    permission_classes = [permissions.IsAuthenticated, IsAtLeastJuniorManager]
+
+    def post(self, request, *args, **kwargs):
+        import openpyxl
+        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+        from openpyxl.utils import get_column_letter
+        from django.http import HttpResponse
+
+        equipment_items = request.data.get('equipment_items', [])
+        net_adjustment_percentage = float(request.data.get('net_adjustment_percentage', 0))
+        
+        is_junior_manager = request.user.user_role == 'Младший менеджер'
+        
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Оборудование КП"
+        
+        # Define headers based on junior manager status
+        headers = ["Порядок", "Оборудование"]
+        if not is_junior_manager:
+            headers.extend(["Цена (З) валюта", "Валюта", "Цена (З) KZT"])
+        headers.extend(["Цена продажи KZT", "Кол-во"])
+        if not is_junior_manager:
+            headers.extend(["Размер маржи %", "Размер маржи (KZT)", "Сумма расходов (KZT)"])
+        headers.append("Доп. расходы")
+        
+        header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
+        header_font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+        thin_border = Border(
+            left=Side(style='thin', color='BFBFBF'),
+            right=Side(style='thin', color='BFBFBF'),
+            top=Side(style='thin', color='BFBFBF'),
+            bottom=Side(style='thin', color='BFBFBF')
+        )
+        
+        ws.append(headers)
+        for col_num, header in enumerate(headers, 1):
+            cell = ws.cell(row=1, column=col_num)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            cell.border = thin_border
+            
+        ws.row_dimensions[1].height = 28
+        
+        for row_num, item in enumerate(equipment_items, 2):
+            row_expenses = item.get('row_expenses', [])
+            expenses_str = ", ".join([f"{exp.get('name')}: {exp.get('formattedValue') or exp.get('value')}" for exp in row_expenses])
+            
+            row_data = [
+                row_num - 1,
+                item.get('equipment_name', ''),
+            ]
+            
+            if not is_junior_manager:
+                price_orig = item.get('purchase_price_original')
+                if price_orig is None:
+                    price_orig = item.get('production_price', 0)
+                curr = item.get('purchase_price_currency') or item.get('currency', 'KZT')
+                
+                row_data.extend([
+                    float(price_orig) if price_orig is not None else 0.0,
+                    curr,
+                    float(item.get('purchase_price_kzt', 0.0)),
+                ])
+                
+            sale_price = item.get('sale_price_kzt', 0.0)
+            if sale_price is not None:
+                # Apply net adjustment and round
+                sale_price = int(round(float(sale_price) * (1 + net_adjustment_percentage / 100.0)))
+            else:
+                sale_price = 0.0
+                
+            row_data.extend([
+                sale_price,
+                int(item.get('quantity', 1))
+            ])
+            
+            if not is_junior_manager:
+                margin_percentage = item.get('margin_percentage', 0.0)
+                row_data.extend([
+                    f"{float(margin_percentage):.2f}%" if margin_percentage is not None else "0.00%",
+                    float(item.get('margin_kzt', 0.0)) if item.get('margin_kzt') is not None else 0.0,
+                    float(item.get('total_expenses_kzt', 0.0)) if item.get('total_expenses_kzt') is not None else 0.0
+                ])
+                
+            row_data.append(expenses_str)
+            
+            ws.append(row_data)
+            ws.row_dimensions[row_num].height = 20
+            
+            for col_num in range(1, len(headers) + 1):
+                cell = ws.cell(row=row_num, column=col_num)
+                cell.border = thin_border
+                cell.font = Font(name="Calibri", size=10)
+                
+                header_text = headers[col_num - 1]
+                if header_text in ["Порядок", "Кол-во"]:
+                    cell.alignment = Alignment(horizontal="center", vertical="center")
+                elif header_text in ["Цена (З) валюта", "Цена (З) KZT", "Цена продажи KZT", "Размер маржи (KZT)", "Сумма расходов (KZT)"]:
+                    cell.alignment = Alignment(horizontal="right", vertical="center")
+                    if cell.value != "":
+                        cell.number_format = '#,##0.00'
+                elif header_text in ["Валюта", "Размер маржи %"]:
+                    cell.alignment = Alignment(horizontal="center", vertical="center")
+                else:
+                    cell.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+
+        for col in ws.columns:
+            max_len = 0
+            col_letter = get_column_letter(col[0].column)
+            for cell in col:
+                val = cell.value
+                if val is not None:
+                    lines = str(val).split('\n')
+                    max_len = max(max_len, max(len(l) for l in lines))
+            ws.column_dimensions[col_letter].width = max(max_len + 3, 10)
+            if ws.column_dimensions[col_letter].width > 50:
+                ws.column_dimensions[col_letter].width = 50
+                
+        response = HttpResponse(
+            content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+        response["Content-Disposition"] = 'attachment; filename="proposal_equipment_export.xlsx"'
+        wb.save(response)
+        return response
+

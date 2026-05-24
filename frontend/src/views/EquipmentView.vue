@@ -15,6 +15,10 @@
                 <span style="margin-left: 5px">Карточки</span>
               </el-radio-button>
             </el-radio-group>
+            <el-button type="success" @click="handleExportExcel" :loading="exportingExcel" style="margin-right: 15px">
+              <el-icon><Download /></el-icon>
+              Экспорт в Excel
+            </el-button>
             <el-button v-if="!authStore.isJuniorManager" type="primary" @click="handleCreate">
               <el-icon><Plus /></el-icon>
               Добавить оборудование
@@ -1076,7 +1080,7 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted, computed, nextTick } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
-import { Plus, Edit, Delete, Search, List, Grid, Picture, Link, Document, Loading, Upload, View } from '@element-plus/icons-vue'
+import { Plus, Edit, Delete, Search, List, Grid, Picture, Link, Document, Loading, Upload, View, Download } from '@element-plus/icons-vue'
 import {
   equipmentAPI,
   categoriesAPI,
@@ -1110,6 +1114,7 @@ import { satuAPI } from '@/api/satu'
 const exchangeRateStore = useExchangeRateStore()
 const authStore = useAuthStore()
 const satuBulkExporting = ref(false)
+const exportingExcel = ref(false)
 const loading = ref(false)
 const submitting = ref(false)
 const equipmentList = ref<Equipment[]>([])
@@ -1624,6 +1629,43 @@ const loadEquipment = async () => {
     console.error('Load equipment error:', error)
   } finally {
     loading.value = false
+  }
+}
+
+const handleExportExcel = async () => {
+  try {
+    exportingExcel.value = true
+    const params: any = {}
+    
+    if (searchQuery.value) {
+      params.search = searchQuery.value
+    }
+    if (filters.category) {
+      params.category_id = filters.category
+    }
+    if (filters.manufacturer) {
+      params.manufacturer_id = filters.manufacturer
+    }
+    if (filters.is_published !== null) {
+      params.is_published = filters.is_published
+    }
+
+    const data = await equipmentAPI.exportToExcel(params)
+    
+    const url = window.URL.createObjectURL(new Blob([data]))
+    const link = document.createElement('a')
+    link.href = url
+    link.setAttribute('download', 'оборудование_экспорт.xlsx')
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    window.URL.revokeObjectURL(url)
+    ElMessage.success('Данные успешно экспортированы в Excel')
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.message || 'Ошибка экспорта в Excel')
+    console.error('Export excel error:', error)
+  } finally {
+    exportingExcel.value = false
   }
 }
 

@@ -375,6 +375,10 @@
                 <el-icon><Refresh /></el-icon>
                 Обновить цены из карточек
               </el-button>
+              <el-button type="success" size="small" @click="handleExportProposalEquipment" :loading="exportingProposalEquipment">
+                <el-icon><Download /></el-icon>
+                Экспорт в Excel
+              </el-button>
             </div>
           </div>
 
@@ -959,7 +963,7 @@
     <el-dialog
       v-model="showAddEquipmentDialog"
       title="Добавить оборудование"
-      width="800px"
+      width="1040px"
     >
       <el-input
         v-model="equipmentSearchQuery"
@@ -1208,7 +1212,7 @@ import { useRouter, useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import axios from 'axios'
 import Cookies from 'js-cookie'
-import { Plus, Edit, Delete, Search, Coin, Setting, DocumentCopy, DataBoard, ArrowUp, ArrowDown, Refresh, View, Loading, Picture } from '@element-plus/icons-vue'
+import { Plus, Edit, Delete, Search, Coin, Setting, DocumentCopy, DataBoard, ArrowUp, ArrowDown, Refresh, View, Loading, Picture, Download } from '@element-plus/icons-vue'
 import {
   proposalsAPI,
   type CommercialProposal,
@@ -1593,6 +1597,7 @@ const showAdditionalPriceDialog = ref(false)
 const loadingAdditionalPrices = ref(false)
 const showAdditionalPriceFormDialog = ref(false)
 const refreshingPrices = ref(false)
+const exportingProposalEquipment = ref(false)
 const additionalPriceForm = reactive({
     price_parameter_name: '',
     value_type: 'fixed',
@@ -1961,6 +1966,60 @@ const refreshEquipmentPrices = async () => {
 // Refresh equipment prices silently (without messages) - for automatic updates
 const refreshEquipmentPricesSilently = async () => {
     await updateEquipmentPricesFromCards(false)
+}
+
+const handleExportProposalEquipment = async () => {
+    if (selectedEquipment.value.length === 0) {
+        ElMessage.warning('Список оборудования пуст')
+        return
+    }
+    
+    try {
+        exportingProposalEquipment.value = true
+        
+        // Prepare items with all calculated values matching the CP settings
+        const itemsToExport = selectedEquipment.value.map(row => {
+            const purchasePriceOriginal = row.purchase_price_original !== undefined 
+                ? row.purchase_price_original 
+                : row.production_price
+                
+            return {
+                equipment_name: row.equipment_name,
+                purchase_price_original: purchasePriceOriginal,
+                purchase_price_currency: row.purchase_price_currency || row.currency,
+                purchase_price_kzt: calculatePurchasePriceKZT(row),
+                sale_price_kzt: row.sale_price_kzt,
+                quantity: row.quantity,
+                margin_percentage: calculateMarginPercentage(row),
+                margin_kzt: calculateMarginKZT(row),
+                total_expenses_kzt: calculateTotalExpensesKZT(row),
+                row_expenses: row.row_expenses
+            }
+        })
+        
+        const data = await equipmentAPI.exportProposalEquipmentToExcel(
+            itemsToExport, 
+            netAdjustmentPercentage.value
+        )
+        
+        const url = window.URL.createObjectURL(new Blob([data]))
+        const link = document.createElement('a')
+        link.href = url
+        
+        const cpNumber = formData.outcoming_number ? `_${formData.outcoming_number}` : ''
+        link.setAttribute('download', `оборудование_КП${cpNumber}.xlsx`)
+        
+        document.body.appendChild(link)
+        link.click()
+        document.body.removeChild(link)
+        window.URL.revokeObjectURL(url)
+        ElMessage.success('Данные оборудования КП успешно экспортированы в Excel')
+    } catch (error: any) {
+        ElMessage.error(error.response?.data?.message || 'Ошибка экспорта оборудования в Excel')
+        console.error('Export CP equipment error:', error)
+    } finally {
+        exportingProposalEquipment.value = false
+    }
 }
 
 // Перемещение оборудования вверх/вниз
