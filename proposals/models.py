@@ -1241,3 +1241,53 @@ class SystemSettings(models.Model):
     def get_settings(cls):
         settings, created = cls.objects.get_or_create(pk=1)
         return settings
+
+
+class ProposalHeaderTemplate(models.Model):
+    """
+    Шаблон шапки КП (лого + реквизиты).
+    Может быть несколько вариантов, каждый пользователь выбирает свой по умолчанию.
+    """
+    name = models.CharField(max_length=255, verbose_name='Название шапки')
+    logo = models.ImageField(upload_to='headers/', null=True, blank=True, verbose_name='Логотип')
+    header_kz_info = models.TextField(null=True, blank=True, verbose_name='Реквизиты (KZ)')
+    header_ru_info = models.TextField(null=True, blank=True, verbose_name='Реквизиты (RU)')
+    created_by = models.ForeignKey(
+        'User', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='created_headers', verbose_name='Создал'
+    )
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='Дата создания')
+    updated_at = models.DateTimeField(auto_now=True, verbose_name='Дата обновления')
+
+    class Meta:
+        db_table = 'proposal_header_templates'
+        verbose_name = 'Шаблон шапки КП'
+        verbose_name_plural = 'Шаблоны шапок КП'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return self.name
+
+
+class UserDefaultHeader(models.Model):
+    """
+    Привязка шапки КП по умолчанию для конкретного пользователя.
+    OneToOne — у каждого пользователя может быть только одна шапка по умолчанию.
+    """
+    user = models.OneToOneField(
+        'User', on_delete=models.CASCADE,
+        related_name='default_header_setting', verbose_name='Пользователь'
+    )
+    header_template = models.ForeignKey(
+        ProposalHeaderTemplate, on_delete=models.SET_NULL, null=True,
+        related_name='default_for_users', verbose_name='Шаблон шапки'
+    )
+    updated_at = models.DateTimeField(auto_now=True, verbose_name='Дата обновления')
+
+    class Meta:
+        db_table = 'user_default_headers'
+        verbose_name = 'Шапка пользователя по умолчанию'
+        verbose_name_plural = 'Шапки пользователей по умолчанию'
+
+    def __str__(self):
+        return f"{self.user} → {self.header_template}"

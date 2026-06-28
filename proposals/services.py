@@ -1027,6 +1027,16 @@ class DataAggregatorService:
         }
 
     def _get_company_logo_url(self):
+        user = getattr(self.proposal, 'updated_by', None) or getattr(self.proposal, 'user', None)
+        if user:
+            from .models import UserDefaultHeader
+            try:
+                default_header = UserDefaultHeader.objects.select_related('header_template').get(user=user)
+                if default_header.header_template and default_header.header_template.logo:
+                    return default_header.header_template.logo.url
+            except UserDefaultHeader.DoesNotExist:
+                pass
+
         sys_settings = SystemSettings.get_settings()
         if sys_settings.company_logo:
              return sys_settings.company_logo.url
@@ -1652,22 +1662,48 @@ class ExportService:
         self.header_data = template.header_data or {}
         self.layout_data = template.layout_data or []
         
-        # Fallback for header info from SystemSettings if template has none
+        # Fallback for header info from UserDefaultHeader or SystemSettings if template has none
         if not self.header_data.get('kz_info') or not self.header_data.get('ru_info'):
-            from .models import SystemSettings
-            sys_settings = SystemSettings.get_settings()
-            if not self.header_data.get('kz_info'):
-                self.header_data['kz_info'] = getattr(sys_settings, 'header_kz_info', '')
-            if not self.header_data.get('ru_info'):
-                self.header_data['ru_info'] = getattr(sys_settings, 'header_ru_info', '')
+            user = getattr(self.proposal, 'updated_by', None) or getattr(self.proposal, 'user', None)
+            header_template = None
+            if user:
+                from .models import UserDefaultHeader
+                try:
+                    default_header = UserDefaultHeader.objects.select_related('header_template').get(user=user)
+                    header_template = default_header.header_template
+                except UserDefaultHeader.DoesNotExist:
+                    pass
+
+            if header_template:
+                if not self.header_data.get('kz_info'):
+                    self.header_data['kz_info'] = getattr(header_template, 'header_kz_info', '')
+                if not self.header_data.get('ru_info'):
+                    self.header_data['ru_info'] = getattr(header_template, 'header_ru_info', '')
+
+            # Still empty? Fallback to SystemSettings
+            if not self.header_data.get('kz_info') or not self.header_data.get('ru_info'):
+                from .models import SystemSettings
+                sys_settings = SystemSettings.get_settings()
+                if not self.header_data.get('kz_info'):
+                    self.header_data['kz_info'] = getattr(sys_settings, 'header_kz_info', '')
+                if not self.header_data.get('ru_info'):
+                    self.header_data['ru_info'] = getattr(sys_settings, 'header_ru_info', '')
 
     def generate_pdf_html(self):
         """Builds HTML for PDF generation using layout_data and data_pkg."""
         from django.template.loader import render_to_string
         
-        logo_url_or_path = self.data_pkg.get('company_logo_url')
+        logo_url_or_path = self.header_data.get('logo') or self.data_pkg.get('company_logo_url')
         final_logo_path = ""
         if logo_url_or_path:
+            logo_url_or_path = logo_url_or_path.split('?')[0]
+            if '/media/' in logo_url_or_path:
+                idx = logo_url_or_path.find('/media/')
+                logo_url_or_path = logo_url_or_path[idx:]
+            elif '/static/' in logo_url_or_path:
+                idx = logo_url_or_path.find('/static/')
+                logo_url_or_path = logo_url_or_path[idx:]
+
             if logo_url_or_path.startswith('/media/'):
                 media_rel = logo_url_or_path[len(settings.MEDIA_URL):] if logo_url_or_path.startswith(settings.MEDIA_URL) else logo_url_or_path[7:]
                 final_logo_path = os.path.join(settings.MEDIA_ROOT, media_rel)
@@ -1750,7 +1786,6 @@ class ExportService:
                 <td style="text-align: center; border: 1px solid #333; padding: 4px; font-size: 10pt;">{i}</td>
                 <td style="border: 1px solid #333; padding: 4px; font-size: 10pt;">
                     <div class="item-name"><b>{escape(str(item.get('name', '')))}</b></div>
-                    <div style="font-size: 9pt; color: #333;">{escape(str(item.get('description', '')))}</div>
                     {f'<div style="font-size: 9pt; color: #666;">Арт: {escape(str(item.get("article")))}</div>' if item.get('article') else ''}
                 </td>
                 <td style="text-align: center; border: 1px solid #333; padding: 4px; font-size: 10pt;">{qty}</td>
@@ -1794,6 +1829,14 @@ class ExportService:
 
     def _resolve_image_path_for_pdf(self, url):
         if not url: return ''
+        url = url.split('?')[0]
+        if '/media/' in url:
+            idx = url.find('/media/')
+            url = url[idx:]
+        elif '/static/' in url:
+            idx = url.find('/static/')
+            url = url[idx:]
+
         if url.startswith('/media/'):
             media_rel = url[len(settings.MEDIA_URL):] if url.startswith(settings.MEDIA_URL) else url[7:]
             local_path = os.path.join(settings.MEDIA_ROOT, media_rel)
@@ -1808,6 +1851,7 @@ class ExportService:
         items = self.data_pkg.get('equipment_list', [])
         html = ""
         specs_dict = self.data_pkg.get('equipment_specifications', {})
+        spec_idx = 1
         for item in items:
             eq_id = item.get('equipment_id')
             if not eq_id: continue
@@ -1828,7 +1872,10 @@ class ExportService:
                     start += r
                 return (None, None)
             
-            html += f'<div style="margin-bottom: 15px;"><h3 style="font-size: 10pt; margin-bottom: 3px; border-bottom: 1px solid #eee;">{item["name"]}</h3><table style="width: 100%; border-collapse: collapse; table-layout: fixed;"><thead><tr style="background-color: #f9f9f9;"><th style="width: 35%; border: 1px solid #333; padding: 4px; font-size: 10pt;">Параметр</th><th style="width: 20%; border: 1px solid #333; padding: 4px; font-size: 10pt;">Значение</th><th style="width: 45%; border: 1px solid #333; padding: 4px; font-size: 10pt;">Изображение</th></tr></thead><tbody>'
+            
+            desc_html = f'<tr><th colspan="3" style="text-align: left; padding: 4px; font-size: 10pt; font-weight: normal; border: 1px solid #333; font-style: italic;">{item.get("description", "")}</th></tr>' if item.get('description') else ''
+            html += f'<div style="margin-bottom: 15px;"><h3 style="font-size: 10pt; margin-bottom: 3px; border-bottom: 1px solid #eee;">{spec_idx}. {item["name"]}</h3><table style="width: 100%; border-collapse: collapse; table-layout: fixed;"><thead><tr style="background-color: #f9f9f9;"><th style="width: 35%; border: 1px solid #333; padding: 4px; font-size: 10pt;">Параметр</th><th style="width: 20%; border: 1px solid #333; padding: 4px; font-size: 10pt;">Значение</th><th style="width: 45%; border: 1px solid #333; padding: 4px; font-size: 10pt;">Изображение</th></tr></thead><tbody>{desc_html}'
+            spec_idx += 1
             for row_index, s in enumerate(specs):
                 spec_name = s.get('name') or s.get('spec_parameter_name', '')
                 spec_value = s.get('value') or s.get('spec_parameter_value', '')
@@ -1945,10 +1992,25 @@ class ExportService:
                 p_ru.add_run(ru_info).font.size = Pt(9)
             
             logo_image = None
-            logo_url = self.data_pkg.get('company_logo_url')
+            logo_url = self.header_data.get('logo') or self.data_pkg.get('company_logo_url')
             if logo_url:
-                rel = logo_url[len(settings.MEDIA_URL):] if logo_url.startswith(settings.MEDIA_URL) else logo_url[7:]
-                final_path = os.path.join(settings.MEDIA_ROOT, rel)
+                logo_url = logo_url.split('?')[0]
+                if '/media/' in logo_url:
+                    idx = logo_url.find('/media/')
+                    logo_url = logo_url[idx:]
+                elif '/static/' in logo_url:
+                    idx = logo_url.find('/static/')
+                    logo_url = logo_url[idx:]
+
+                if logo_url.startswith('/media/'):
+                    rel = logo_url[len(settings.MEDIA_URL):] if logo_url.startswith(settings.MEDIA_URL) else logo_url[7:]
+                    final_path = os.path.join(settings.MEDIA_ROOT, rel)
+                elif logo_url.startswith('/static/'):
+                    rel = logo_url[len(settings.STATIC_URL):] if logo_url.startswith(settings.STATIC_URL) else logo_url[8:]
+                    final_path = os.path.join(settings.BASE_DIR, 'static', rel)
+                else:
+                    final_path = logo_url
+
                 if not os.path.exists(final_path): final_path = os.path.join(settings.BASE_DIR, 'static/assets/prosnab_logo.png')
                 if os.path.exists(final_path):
                     logo_image = InlineImage(doc, final_path, width=Mm(40))
@@ -2052,10 +2114,6 @@ class ExportService:
             p_name = row[1].paragraphs[0]
             p_name.add_run(item.get('name', '')).bold = True
             
-            if item.get('description'):
-                p_desc = row[1].add_paragraph(item.get('description'))
-                p_desc.style.font.size = Pt(9)
-                
             if item.get('article'):
                 p_art = row[1].add_paragraph(f"Арт: {item.get('article')}")
                 p_art.style.font.size = Pt(9)
@@ -2128,19 +2186,31 @@ class ExportService:
     def _add_equipment_specs_docx(self, doc):
         items = self.data_pkg.get('equipment_list', [])
         specs_dict = self.data_pkg.get('equipment_specifications', {})
+        spec_idx = 1
         for item in items:
             eq_id = item.get('equipment_id')
             specs = specs_dict.get(eq_id) or specs_dict.get(str(eq_id))
             if not specs: continue
             
-            doc.add_heading(item.get('name', ''), level=3).style.font.size = Pt(10)
+            doc.add_heading(f"{spec_idx}. {item.get('name', '')}", level=3).style.font.size = Pt(10)
+            spec_idx += 1
             images = item.get('images', [])
             has_images = len(images) > 0
             cols = 3 if has_images else 2
             
-            table = doc.add_table(rows=1, cols=cols)
+            table = doc.add_table(rows=0, cols=cols)
             table.style = 'Table Grid'
-            hdr = table.rows[0].cells
+            
+            if item.get('description'):
+                desc_row = table.add_row().cells
+                desc_row[0].text = item.get('description')
+                if cols > 1:
+                    desc_row[0].merge(desc_row[cols - 1])
+                p = desc_row[0].paragraphs[0]
+                p.runs[0].font.size = Pt(10)
+                p.runs[0].font.italic = True
+            
+            hdr = table.add_row().cells
             hdr[0].text = 'Параметр'; hdr[1].text = 'Значение'
             if has_images: hdr[2].text = 'Изображение'
             

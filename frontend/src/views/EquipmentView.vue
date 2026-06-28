@@ -310,14 +310,199 @@
       </div>
     </el-card>
 
-    <!-- Модальное окно создания/редактирования -->
+    <!-- Модальное окно создания/редактирования / Просмотра карточки -->
     <el-dialog
       v-model="dialogVisible"
-      :title="isEditMode ? 'Редактировать оборудование: ' + (formData.equipment_name || 'без названия') : 'Создать оборудование'"
-      width="900px"
+      :title="authStore.isJuniorManager ? 'Просмотр оборудования: ' + (formData.equipment_name || 'без названия') : (isEditMode ? 'Редактировать оборудование: ' + (formData.equipment_name || 'без названия') : 'Создать оборудование')"
+      :width="authStore.isJuniorManager ? '1050px' : '900px'"
       @close="handleDialogClose"
     >
-      <el-tabs v-model="activeTab">
+      <!-- Карточка товара (Product Card) для Младшего менеджера -->
+      <div v-if="authStore.isJuniorManager" class="equipment-card-view">
+        <el-row :gutter="30">
+          <el-col :span="10">
+            <!-- Галерея картинок -->
+            <div v-if="formData.equipment_imagelinks && formData.equipment_imagelinks.length > 0" class="image-gallery-container">
+              <el-carousel trigger="click" height="350px" indicator-position="outside" arrow="always">
+                <el-carousel-item v-for="(img, idx) in formData.equipment_imagelinks" :key="idx">
+                  <div class="carousel-image-wrapper">
+                    <el-image 
+                      :src="getImageSrc(img.url)" 
+                      fit="contain" 
+                      style="width: 100%; height: 100%; border-radius: 8px;" 
+                      :preview-src-list="formData.equipment_imagelinks.filter(i => i && i.url).map(i => getImageSrc(i.url))"
+                      :initial-index="idx"
+                      preview-teleported
+                    />
+                  </div>
+                </el-carousel-item>
+              </el-carousel>
+            </div>
+            <div v-else class="card-no-image">
+              <el-icon :size="64" style="color: #909399;"><Picture /></el-icon>
+              <span style="color: #909399; margin-top: 10px;">Нет изображений</span>
+            </div>
+          </el-col>
+
+          <el-col :span="14">
+            <!-- Основная информация в режиме чтения -->
+            <div class="equipment-core-details">
+              <div class="details-header" style="margin-bottom: 15px;">
+                <div class="article-and-status" style="display: flex; gap: 10px; margin-bottom: 10px;">
+                  <el-tag v-if="formData.equipment_articule" type="info" effect="plain">
+                    Артикул: {{ formData.equipment_articule }}
+                  </el-tag>
+                  <el-tag :type="formData.is_published ? 'success' : 'info'" effect="dark">
+                    {{ formData.is_published ? 'Опубликовано' : 'Черновик' }}
+                  </el-tag>
+                </div>
+                <h2 class="equipment-title-view" style="margin: 0; font-size: 24px; font-weight: 600; color: #303133; line-height: 1.3;">
+                  {{ formData.equipment_name || 'Без названия' }}
+                </h2>
+              </div>
+
+              <div class="price-section" style="background-color: #f5f7fa; padding: 15px; border-radius: 8px; margin: 15px 0;">
+                <div class="price-label" style="font-size: 13px; color: #909399; margin-bottom: 5px;">Цена продажи:</div>
+                <div class="price-value-large" style="font-size: 22px; font-weight: 700; color: #67c23a;">
+                  <span v-if="formData.sale_price_kzt !== null && formData.sale_price_kzt !== undefined && formData.sale_price_kzt !== ''">
+                    {{ formatPrice(formData.sale_price_kzt, 'KZT') }}
+                  </span>
+                  <span v-else style="color: #909399;">Цена не указана</span>
+                </div>
+              </div>
+
+              <div class="metadata-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 20px;">
+                <div class="meta-item" style="grid-column: span 2;" v-if="formData.categories && formData.categories.length > 0">
+                  <div class="meta-label" style="font-size: 13px; color: #909399; margin-bottom: 4px;">Категории:</div>
+                  <div class="meta-tags" style="display: flex; flex-wrap: wrap; gap: 6px;">
+                    <el-tag v-for="catId in formData.categories" :key="catId" size="small" type="primary">
+                      {{ getCategoryName(catId) }}
+                    </el-tag>
+                  </div>
+                </div>
+                
+                <div class="meta-item" style="grid-column: span 2;" v-if="formData.manufacturers && formData.manufacturers.length > 0">
+                  <div class="meta-label" style="font-size: 13px; color: #909399; margin-bottom: 4px;">Производители:</div>
+                  <div class="meta-tags" style="display: flex; flex-wrap: wrap; gap: 6px;">
+                    <el-tag v-for="manId in formData.manufacturers" :key="manId" size="small" type="success">
+                      {{ getManufacturerName(manId) }}
+                    </el-tag>
+                  </div>
+                </div>
+
+                <div class="meta-item" style="grid-column: span 2;" v-if="formData.equipment_types && formData.equipment_types.length > 0">
+                  <div class="meta-label" style="font-size: 13px; color: #909399; margin-bottom: 4px;">Типы оборудования:</div>
+                  <div class="meta-tags" style="display: flex; flex-wrap: wrap; gap: 6px;">
+                    <el-tag v-for="typeId in formData.equipment_types" :key="typeId" size="small" type="warning">
+                      {{ getEquipmentTypeName(typeId) }}
+                    </el-tag>
+                  </div>
+                </div>
+
+                <div class="meta-item" v-if="formData.equipment_warranty">
+                  <div class="meta-label" style="font-size: 13px; color: #909399; margin-bottom: 2px;">Гарантия:</div>
+                  <div class="meta-value" style="font-size: 14px; color: #606266; font-weight: 500;">
+                    {{ formData.equipment_warranty }}
+                  </div>
+                </div>
+
+                <div class="meta-item" v-if="formData.equipment_madein_country">
+                  <div class="meta-label" style="font-size: 13px; color: #909399; margin-bottom: 2px;">Страна производства:</div>
+                  <div class="meta-value" style="font-size: 14px; color: #606266; font-weight: 500;">
+                    {{ formData.equipment_madein_country }}
+                  </div>
+                </div>
+
+                <div class="meta-item" v-if="formData.equipment_uom">
+                  <div class="meta-label" style="font-size: 13px; color: #909399; margin-bottom: 2px;">Единица измерения:</div>
+                  <div class="meta-value" style="font-size: 14px; color: #606266; font-weight: 500;">
+                    {{ formData.equipment_uom }}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </el-col>
+        </el-row>
+
+        <div class="description-block" v-if="formData.equipment_short_description" style="margin-top: 20px; border-top: 1px solid #ebeef5; padding-top: 15px;">
+          <h4 style="margin: 0 0 8px 0; color: #303133; font-size: 15px;">Описание</h4>
+          <p class="description-text" style="color: #606266; font-size: 14px; line-height: 1.6; white-space: pre-line; margin: 0;">
+            {{ formData.equipment_short_description }}
+          </p>
+        </div>
+
+        <!-- Подробная информация во вкладках -->
+        <el-tabs v-model="activeCardTab" style="margin-top: 25px;">
+          <el-tab-pane label="Характеристики" name="details">
+            <el-table :data="localDetails" border stripe style="width: 100%">
+              <el-table-column prop="detail_parameter_name" label="Параметр" width="280" />
+              <el-table-column prop="detail_parameter_value" label="Значение" />
+            </el-table>
+            <div v-if="localDetails.length === 0" style="text-align: center; color: #909399; padding: 20px;">
+              Нет характеристик
+            </div>
+          </el-tab-pane>
+
+          <el-tab-pane label="Спецификации" name="specifications">
+            <el-table :data="localSpecifications" border stripe style="width: 100%">
+              <el-table-column prop="spec_parameter_name" label="Спецификация" width="280" />
+              <el-table-column prop="spec_parameter_value" label="Значение" />
+            </el-table>
+            <div v-if="localSpecifications.length === 0" style="text-align: center; color: #909399; padding: 20px;">
+              Нет спецификаций
+            </div>
+          </el-tab-pane>
+
+          <el-tab-pane label="Техпроцессы" name="tech_processes">
+            <el-table :data="localTechProcesses" border stripe style="width: 100%">
+              <el-table-column prop="tech_name" label="Название процесса" width="250" />
+              <el-table-column prop="tech_value" label="Значение" width="200" />
+              <el-table-column prop="tech_desc" label="Описание" />
+            </el-table>
+            <div v-if="localTechProcesses.length === 0" style="text-align: center; color: #909399; padding: 20px;">
+              Нет техпроцессов
+            </div>
+          </el-tab-pane>
+
+          <el-tab-pane label="Документы" name="documents">
+            <el-table :data="localDocuments" border stripe style="width: 100%">
+              <el-table-column prop="document_type" label="Тип документа" width="200">
+                <template #default="{ row }">
+                  {{ getDocumentTypeLabel(row.document_type) }}
+                </template>
+              </el-table-column>
+              <el-table-column prop="document_name" label="Название" min-width="200" />
+              <el-table-column label="Файл/Ссылка" width="200" align="center">
+                <template #default="{ row }">
+                  <el-link v-if="row.file_url" :href="row.file_url" target="_blank" type="primary">
+                    <el-icon><Link /></el-icon> Открыть ссылку
+                  </el-link>
+                  <el-link v-else-if="row.file" :href="getFileUrl(row.file)" target="_blank" type="primary">
+                    <el-icon><Document /></el-icon> Открыть файл
+                  </el-link>
+                  <span v-else style="color: #909399;">—</span>
+                </template>
+              </el-table-column>
+            </el-table>
+            <div v-if="localDocuments.length === 0" style="text-align: center; color: #909399; padding: 20px;">
+              Нет документов
+            </div>
+          </el-tab-pane>
+
+          <el-tab-pane label="Логистика" name="logistics">
+            <el-table :data="localLogistics" border stripe style="width: 100%">
+              <el-table-column prop="route_type" label="Маршрут" width="250" />
+              <el-table-column prop="estimated_days" label="Срок (дней)" width="150" align="center" />
+              <el-table-column prop="notes" label="Примечание" />
+            </el-table>
+            <div v-if="localLogistics.length === 0" style="text-align: center; color: #909399; padding: 20px;">
+              Нет логистических маршрутов
+            </div>
+          </el-tab-pane>
+        </el-tabs>
+      </div>
+
+      <el-tabs v-else v-model="activeTab">
         <!-- Основная информация -->
         <el-tab-pane label="Основная информация" name="basic">
           <el-form
@@ -1129,6 +1314,7 @@ const dialogVisible = ref(false)
 const isEditMode = ref(false)
 const currentEquipmentId = ref<number | null>(null)
 const activeTab = ref('basic')
+const activeCardTab = ref('details')
 const formRef = ref<FormInstance>()
 const viewMode = ref<'table' | 'grid'>('table')
 // Карточки: картинка загружена (скрываем плейсхолдер)
@@ -1595,6 +1781,11 @@ const getManufacturerName = computed(() => (id: number) => {
   return man?.manufacturer_name || `ID: ${id}`
 })
 
+const getEquipmentTypeName = computed(() => (id: number) => {
+  const t = equipmentTypes.value.find(type => type.type_id === id)
+  return t?.type_name || `ID: ${id}`
+})
+
 // Methods
 const loadEquipment = async () => {
   try {
@@ -1724,6 +1915,7 @@ const handleEdit = async (equipment: Equipment) => {
     isEditMode.value = true
     currentEquipmentId.value = equipment.equipment_id
     activeTab.value = 'basic'
+    activeCardTab.value = 'details'
     
     // Заполняем форму данными оборудования
     Object.assign(formData, {
@@ -2249,6 +2441,7 @@ const resetForm = () => {
   localTechProcesses.value = []
   localLogistics.value = []
   localDocuments.value = []
+  activeCardTab.value = 'details'
 }
 
 // Обработчики для создания и удаления категорий, производителей и типов
@@ -2963,5 +3156,81 @@ onMounted(async () => {
   max-width: 100%;
   color: #909399;
   font-size: 13px;
+}
+
+/* Стили для карточки товара в режиме просмотра */
+.equipment-card-view {
+  padding: 10px 5px;
+}
+
+.image-gallery-container {
+  border: 1px solid #e4e7ed;
+  border-radius: 8px;
+  padding: 10px;
+  background-color: #fff;
+  box-shadow: 0 2px 12px 0 rgba(0, 0, 0, 0.05);
+}
+
+.carousel-image-wrapper {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background-color: #fafafa;
+  border-radius: 8px;
+}
+
+.card-no-image {
+  height: 370px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  border: 1px dashed #dcdfe6;
+  border-radius: 8px;
+  background-color: #fafafa;
+}
+
+.equipment-core-details {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  justify-content: flex-start;
+}
+
+.metadata-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.metadata-grid .meta-item {
+  border-bottom: 1px solid #f2f6fc;
+  padding-bottom: 8px;
+}
+
+.metadata-grid .meta-item:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.metadata-grid .meta-label {
+  color: #909399;
+  font-size: 13px;
+  margin-bottom: 2px;
+}
+
+.metadata-grid .meta-value {
+  color: #303133;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.metadata-grid .meta-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 </style>

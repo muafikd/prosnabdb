@@ -1,5 +1,11 @@
 <template>
-  <div class="proposal-header">
+  <div class="proposal-header" style="position: relative;">
+    <div style="position: absolute; right: 20px; top: -10px;">
+      <el-button size="small" type="primary" plain @click="$emit('choose-header')">
+        Выбрать шапку
+      </el-button>
+    </div>
+
     <div class="logo-section">
       <img :src="headerData?.logo || '/assets/prosnab_logo.png'" alt="PROSNAB Service" class="logo-img" />
     </div>
@@ -37,7 +43,7 @@ const props = defineProps<{
   }
 }>()
 
-const emit = defineEmits(['update:headerData'])
+const emit = defineEmits(['update:headerData', 'choose-header'])
 
 const defaultKZInfo = `
   <p class="company-name">ЖШС «PROSNABservice»</p>

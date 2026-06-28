@@ -9,9 +9,9 @@
             <p><strong>Роль:</strong> {{ authStore.userRole || 'Не указана' }}</p>
           </div>
           <div class="user-info-right">
-            <el-button type="primary" @click="logoDialogOpen = true">
+            <el-button type="primary" @click="headerListDialogOpen = true">
               <el-icon><Picture /></el-icon>
-              Настройка лого
+              Шапки КП
             </el-button>
           </div>
         </div>
@@ -87,65 +87,102 @@
       </div>
     </el-card>
 
-    <!-- Logo Settings Dialog -->
+    <!-- Headers List Dialog -->
     <el-dialog
-      v-model="logoDialogOpen"
-      title="Настройка логотипа компании"
-      width="500px"
+      v-model="headerListDialogOpen"
+      title="Шапки КП (Логотип и реквизиты)"
+      width="800px"
+      align-center
+    >
+      <div style="margin-bottom: 20px;">
+        <el-button v-if="authStore.isManager" type="primary" @click="openCreateHeader">Создать шапку КП</el-button>
+      </div>
+
+      <el-table :data="headersList" style="width: 100%" v-loading="loadingHeaders">
+        <el-table-column label="Логотип" width="100">
+          <template #default="scope">
+            <img v-if="scope.row.logo_url" :src="scope.row.logo_url" alt="logo" style="max-height: 40px; max-width: 80px; object-fit: contain;" />
+            <span v-else>Нет</span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="name" label="Название" />
+        <el-table-column prop="created_by_name" label="Создатель" />
+        <el-table-column label="Статус">
+          <template #default="scope">
+            <el-tag v-if="scope.row.is_default" type="success">По умолчанию</el-tag>
+            <el-button v-else size="small" @click="setDefaultHeader(scope.row.id)">Установить</el-button>
+          </template>
+        </el-table-column>
+        <el-table-column label="Действия" width="150" align="right">
+          <template #default="scope">
+            <template v-if="authStore.isManager">
+              <el-button size="small" type="primary" circle @click="openEditHeader(scope.row)">
+                <el-icon><Edit /></el-icon>
+              </el-button>
+              <el-button size="small" type="danger" circle @click="deleteHeader(scope.row.id)">
+                <el-icon><Delete /></el-icon>
+              </el-button>
+            </template>
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-dialog>
+
+    <!-- Header Form Dialog -->
+    <el-dialog
+      v-model="headerFormDialogOpen"
+      :title="editingHeaderId ? 'Редактирование шапки' : 'Создание шапки КП'"
+      width="600px"
       align-center
     >
       <div class="logo-dialog-content">
-        <div class="logo-preview-section">
-          <p class="section-label">Текущий логотип (используется в КП и PDF):</p>
-          <div class="logo-container">
-            <img v-if="logoUrl" :src="logoUrl" alt="Company Logo" class="preview-img" />
-            <el-empty v-else description="Логотип не загружен" />
-          </div>
-        </div>
+        <el-form label-position="top">
+          <el-form-item label="Название шапки" required>
+            <el-input v-model="headerForm.name" placeholder="Введите название..." />
+          </el-form-item>
 
-        <el-divider />
+          <el-form-item label="Логотип">
+            <div v-if="headerForm.logoPreviewUrl" class="logo-preview-section" style="margin-bottom: 10px;">
+              <img :src="headerForm.logoPreviewUrl" alt="Logo preview" style="max-height: 100px; max-width: 200px; object-fit: contain;" />
+            </div>
+            <el-upload
+              class="logo-uploader"
+              action="#"
+              :auto-upload="false"
+              :show-file-list="false"
+              :on-change="handleLogoFileChange"
+            >
+              <el-button type="primary">Выбрать файл</el-button>
+              <template #tip>
+                <div class="el-upload__tip">
+                  Поддерживаются форматы PNG, JPG. Рекомендуется прозрачный фон.
+                </div>
+              </template>
+            </el-upload>
+          </el-form-item>
 
-        <div class="upload-section">
-          <p class="section-label">Загрузить новый логотип:</p>
-          <el-upload
-            class="logo-uploader"
-            action="#"
-            :auto-upload="false"
-            :show-file-list="false"
-            :on-change="handleLogoChange"
-          >
-            <el-button type="primary">Выбрать файл</el-button>
-            <template #tip>
-              <div class="el-upload__tip">
-                Поддерживаются форматы PNG, JPG. Рекомендуется прозрачный фон.
-              </div>
-            </template>
-          </el-upload>
-        </div>
+          <el-form-item label="Реквизиты компании для шапки (Казахский):">
+            <el-input
+              v-model="headerForm.header_kz_info"
+              type="textarea"
+              :rows="4"
+              placeholder="Введите адрес, БИН, ИИК на казахском..."
+            />
+          </el-form-item>
 
-        <el-divider />
-
-        <div class="header-info-section">
-          <p class="section-label">Реквизиты компании для шапки (Казахский):</p>
-          <el-input
-            v-model="headerKzInfo"
-            type="textarea"
-            :rows="4"
-            placeholder="Введите адрес, БИН, ИИК на казахском..."
-          />
-          
-          <p class="section-label" style="margin-top: 15px;">Реквизиты компании для шапки (Русский):</p>
-          <el-input
-            v-model="headerRuInfo"
-            type="textarea"
-            :rows="4"
-            placeholder="Введите адрес, БИН, ИИК на русском..."
-          />
-        </div>
+          <el-form-item label="Реквизиты компании для шапки (Русский):">
+            <el-input
+              v-model="headerForm.header_ru_info"
+              type="textarea"
+              :rows="4"
+              placeholder="Введите адрес, БИН, ИИК на русском..."
+            />
+          </el-form-item>
+        </el-form>
       </div>
       <template #footer>
-        <el-button @click="logoDialogOpen = false">Отмена</el-button>
-        <el-button type="primary" :loading="savingHeader" @click="saveHeaderInfo">Сохранить реквизиты</el-button>
+        <el-button @click="headerFormDialogOpen = false">Отмена</el-button>
+        <el-button type="primary" :loading="savingHeader" @click="saveHeaderData">Сохранить</el-button>
       </template>
     </el-dialog>
   </div>
@@ -155,17 +192,20 @@
 import { ref, computed, onMounted } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { useRouter } from 'vue-router'
-import { Box, Document, DataBoard, Picture } from '@element-plus/icons-vue'
+import { Box, Document, DataBoard, Picture, Edit, Delete } from '@element-plus/icons-vue'
 import axios from 'axios'
 import Cookies from 'js-cookie'
 import { ElMessage } from 'element-plus'
 import { bitrixAPI } from '@/api/bitrix'
 import { satuAPI } from '@/api/satu'
 
+import { proposalHeadersAPI, type ProposalHeaderTemplate } from '@/api/proposalHeaders'
+import { ElMessageBox } from 'element-plus'
 const authStore = useAuthStore()
 const router = useRouter()
-const logoDialogOpen = ref(false)
-const logoUrl = ref('')
+const headerListDialogOpen = ref(false)
+const headerFormDialogOpen = ref(false)
+
 
 // Виджет Bitrix24: суперпользователь или роль «Администратор»
 const canManageBitrix = computed(() => {
@@ -184,41 +224,114 @@ const satuChecking = ref(false)
 const satuCheckMessage = ref('')
 const satuCheckSuccess = ref(false)
 
-const headerKzInfo = ref('')
-const headerRuInfo = ref('')
+
+const headersList = ref<ProposalHeaderTemplate[]>([])
+const loadingHeaders = ref(false)
+
+const headerForm = ref({
+  name: '',
+  header_kz_info: '',
+  header_ru_info: '',
+  logoPreviewUrl: '',
+  file: null as any
+})
+const editingHeaderId = ref<number | null>(null)
 const savingHeader = ref(false)
 
-const fetchLogo = async () => {
+const loadHeaders = async () => {
+  loadingHeaders.value = true
   try {
-    const token = Cookies.get('access_token')
-    const response = await axios.get('/api/system-settings/logo/', {
-      headers: { 'Authorization': `Bearer ${token}` }
-    })
-    logoUrl.value = response.data.url + '?t=' + Date.now()
+    headersList.value = await proposalHeadersAPI.list()
   } catch (e) {
-    console.error('Failed to fetch logo', e)
+    ElMessage.error('Ошибка загрузки списка шапок')
+  } finally {
+    loadingHeaders.value = false
   }
 }
 
-const handleLogoChange = async (file: any) => {
-  const formData = new FormData()
-  formData.append('file', file.raw)
+const openCreateHeader = () => {
+  editingHeaderId.value = null
+  headerForm.value = {
+    name: '',
+    header_kz_info: '',
+    header_ru_info: '',
+    logoPreviewUrl: '',
+    file: null
+  }
+  headerFormDialogOpen.value = true
+}
+
+const openEditHeader = (header: ProposalHeaderTemplate) => {
+  editingHeaderId.value = header.id
+  headerForm.value = {
+    name: header.name,
+    header_kz_info: header.header_kz_info || '',
+    header_ru_info: header.header_ru_info || '',
+    logoPreviewUrl: header.logo_url || '',
+    file: null
+  }
+  headerFormDialogOpen.value = true
+}
+
+const handleLogoFileChange = (file: any) => {
+  headerForm.value.file = file.raw
+  headerForm.value.logoPreviewUrl = URL.createObjectURL(file.raw)
+}
+
+const saveHeaderData = async () => {
+  if (!headerForm.value.name) {
+    ElMessage.warning('Введите название шапки')
+    return
+  }
   
+  savingHeader.value = true
+  const formData = new FormData()
+  formData.append('name', headerForm.value.name)
+  formData.append('header_kz_info', headerForm.value.header_kz_info)
+  formData.append('header_ru_info', headerForm.value.header_ru_info)
+  if (headerForm.value.file) {
+    formData.append('logo', headerForm.value.file)
+  }
+
   try {
-    const token = Cookies.get('access_token')
-    await axios.post('/api/system-settings/logo/', formData, {
-      headers: { 
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'multipart/form-data'
-      }
-    })
-    ElMessage.success('Логотип успешно обновлен')
-    await fetchLogo()
+    if (editingHeaderId.value) {
+      await proposalHeadersAPI.update(editingHeaderId.value, formData)
+      ElMessage.success('Шапка успешно обновлена')
+    } else {
+      await proposalHeadersAPI.create(formData)
+      ElMessage.success('Шапка успешно создана')
+    }
+    headerFormDialogOpen.value = false
+    await loadHeaders()
   } catch (e) {
-    ElMessage.error('Ошибка при загрузке логотипа')
+    ElMessage.error('Ошибка при сохранении шапки')
+  } finally {
+    savingHeader.value = false
   }
 }
 
+const deleteHeader = async (id: number) => {
+  try {
+    await ElMessageBox.confirm('Вы уверены, что хотите удалить эту шапку?', 'Удаление', { type: 'warning' })
+    await proposalHeadersAPI.delete(id)
+    ElMessage.success('Шапка удалена')
+    await loadHeaders()
+  } catch (e: any) {
+    if (e !== 'cancel') {
+      ElMessage.error('Ошибка при удалении шапки')
+    }
+  }
+}
+
+const setDefaultHeader = async (id: number) => {
+  try {
+    await proposalHeadersAPI.setDefault(id)
+    ElMessage.success('Шапка установлена по умолчанию')
+    await loadHeaders()
+  } catch (e) {
+    ElMessage.error('Ошибка при установке шапки по умолчанию')
+  }
+}
 const loadSystemSettings = async () => {
   if (!canManageBitrix.value) return
   try {
@@ -292,7 +405,7 @@ const saveHeaderInfo = async () => {
 }
 
 onMounted(async () => {
-  await fetchLogo()
+  await loadHeaders()
   await loadSystemSettings()
 })
 </script>

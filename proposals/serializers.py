@@ -6,7 +6,7 @@ from .models import (
     Logistics, EquipmentDocument, EquipmentLine, EquipmentLineItem, AdditionalPrices,
     EquipmentList, EquipmentListLineItem, EquipmentListItem, PaymentLog, CrmDeal,
     CommercialProposal, ExchangeRate, CostCalculation, ProposalTemplate, SectionTemplate,
-    ProposalAdjustment
+    ProposalAdjustment, ProposalHeaderTemplate, UserDefaultHeader
 )
 from django.conf import settings
 from .services import LinkConverterService, CloudImageImportService
@@ -1713,3 +1713,31 @@ class SectionTemplateSerializer(serializers.ModelSerializer):
         model = SectionTemplate
         fields = ['id', 'name', 'title', 'text', 'created_at', 'updated_at']
         read_only_fields = ['id', 'created_at', 'updated_at']
+
+
+class ProposalHeaderTemplateSerializer(serializers.ModelSerializer):
+    """Serializer for ProposalHeaderTemplate — шаблоны шапок КП."""
+    created_by_name = serializers.CharField(source='created_by.user_name', read_only=True, default='')
+    logo_url = serializers.SerializerMethodField()
+    is_default = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ProposalHeaderTemplate
+        fields = [
+            'id', 'name', 'logo', 'logo_url', 'header_kz_info', 'header_ru_info',
+            'created_by', 'created_by_name', 'is_default', 'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'created_by', 'created_by_name', 'created_at', 'updated_at']
+
+    def get_logo_url(self, obj):
+        if obj.logo:
+            return obj.logo.url
+        return None
+
+    def get_is_default(self, obj):
+        request = self.context.get('request')
+        if request and request.user.is_authenticated:
+            return UserDefaultHeader.objects.filter(
+                user=request.user, header_template=obj
+            ).exists()
+        return False

@@ -133,6 +133,11 @@
                <span v-if="saving" class="saving-indicator">Сохранение...</span>
              </div>
              <div class="header-right-group">
+               <el-button @click="openEditModal" type="success" plain style="margin-right: 10px;">
+                 <el-icon><Edit /></el-icon>
+                 Редактировать КП
+               </el-button>
+
                <el-button @click="openSectionLibrary" style="margin-right: 10px;">
                  <el-icon><List /></el-icon>
                  Библиотека разделов
@@ -165,6 +170,7 @@
               <ProposalHeader 
                 :header-data="templateData?.header_data" 
                 @update:headerData="updateHeaderData"
+                @choose-header="openChooseHeaderDialog"
               />
               
               <!-- Proposal Number and Date - Right Aligned -->
@@ -357,11 +363,42 @@
       </template>
     </el-dialog>
 
+
+    <!-- Choose Header Dialog -->
+    <el-dialog
+      v-model="chooseHeaderDialogOpen"
+      title="Выбрать шапку КП"
+      width="800px"
+      align-center
+    >
+      <el-table :data="headersList" style="width: 100%" v-loading="loadingHeaders">
+        <el-table-column label="Логотип" width="100">
+          <template #default="scope">
+            <img v-if="scope.row.logo_url" :src="scope.row.logo_url" alt="logo" style="max-height: 40px; max-width: 80px; object-fit: contain;" />
+          </template>
+        </el-table-column>
+        <el-table-column prop="name" label="Название" />
+        <el-table-column label="Действия" width="120" align="right">
+          <template #default="scope">
+            <el-button size="small" type="success" @click="selectHeader(scope.row)">Выбрать</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-dialog>
+
+    <ProposalFormModal
+      v-model:visible="isEditModalVisible"
+      :proposal-id="proposalIdNum"
+      @saved="handleProposalSaved"
+    />
   </div>
 </template>
 
+
 <script setup lang="ts">
-import { ref, onMounted, defineAsyncComponent } from 'vue'
+import ProposalFormModal from '@/components/proposals/ProposalFormModal.vue'
+import { proposalHeadersAPI, type ProposalHeaderTemplate } from '@/api/proposalHeaders'
+import { ref, computed, onMounted, defineAsyncComponent } from 'vue'
 import { useRoute } from 'vue-router'
 import { Search, Edit, Delete, ArrowUp, ArrowDown, Plus, List, Sort, ArrowLeft } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox, ElLoading } from 'element-plus'
@@ -1093,6 +1130,62 @@ onMounted(async () => {
        fetchProposals()
    }
 })
+
+const chooseHeaderDialogOpen = ref(false)
+const headersList = ref<ProposalHeaderTemplate[]>([])
+const loadingHeaders = ref(false)
+
+const openChooseHeaderDialog = async () => {
+  chooseHeaderDialogOpen.value = true
+  loadingHeaders.value = true
+  try {
+    headersList.value = await proposalHeadersAPI.list()
+  } catch (e) {
+    ElMessage.error('Ошибка при загрузке списка шапок')
+  } finally {
+    loadingHeaders.value = false
+  }
+}
+
+const selectHeader = (header: ProposalHeaderTemplate) => {
+  templateData.value.header_data.logo = header.logo_url || ''
+  templateData.value.header_data.kz_info = header.header_kz_info || ''
+  templateData.value.header_data.ru_info = header.header_ru_info || ''
+  templateData.value.header_data.selected_header_id = header.id
+  chooseHeaderDialogOpen.value = false
+  ElMessage.success('Шапка успешно выбрана')
+}
+
+const isEditModalVisible = ref(false)
+const proposalIdNum = computed(() => {
+  const queryId = route.query.proposal_id
+  if (queryId) {
+    const num = Number(queryId)
+    if (!isNaN(num)) return num
+  }
+  return selectedProposal.value?.proposal_id ? Number(selectedProposal.value.proposal_id) : null
+})
+const openEditModal = () => {
+  isEditModalVisible.value = true
+}
+const handleProposalSaved = async () => {
+  isEditModalVisible.value = false
+  if (selectedProposal.value) {
+     const token = Cookies.get('access_token')
+     try {
+         const proposalId = selectedProposal.value.proposal_id
+         const propResp = await axios.get(`/api/commercial-proposals/${proposalId}/`, {
+             headers: { Authorization: `Bearer ${token}` }
+         })
+         selectedProposal.value = propResp.data
+         await refreshDataPackage()
+         ElMessage.success('Данные КП обновлены в макете')
+     } catch (e) {
+         console.error(e)
+         ElMessage.error('Ошибка при обновлении макета после редактирования')
+     }
+  }
+}
 </script>
 
 <style scoped>

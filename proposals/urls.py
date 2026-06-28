@@ -122,6 +122,13 @@ urlpatterns = [
     
     # Include router URLs for ViewSets (automatically registers all actions)
     path('', include(router.urls)),
+    
+    # Proposal Headers (Шапки КП)
+    path('proposal-headers/', views.ProposalHeaderTemplateListCreateView.as_view(), name='proposal-header-list'),
+    path('proposal-headers/<int:pk>/', views.ProposalHeaderTemplateDetailView.as_view(), name='proposal-header-detail'),
+    path('proposal-headers/<int:pk>/set-default/', views.SetDefaultHeaderView.as_view(), name='proposal-header-set-default'),
+    path('proposal-headers/my-default/', views.MyDefaultHeaderView.as_view(), name='proposal-header-my-default'),
+    
     path('system-settings/logo/', views.SystemSettingsLogoView.as_view(), name='system-settings-logo'),
     path('system-settings/', views.SystemSettingsView.as_view(), name='system-settings'),
     path('bitrix/check/', views.BitrixCheckConnectionView.as_view(), name='bitrix-check'),

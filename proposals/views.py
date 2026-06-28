@@ -12,6 +12,7 @@ from django.db.models import Q, Count, Sum
 from django.utils import timezone
 from datetime import datetime, timedelta
 from rest_framework.exceptions import ValidationError
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 try:
     from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiParameter, OpenApiExample
     from drf_spectacular.types import OpenApiTypes
@@ -35,7 +36,8 @@ from .models import (
     EquipmentSpecification, EquipmentTechProcess, Equipment, PurchasePrice,
     Logistics, EquipmentDocument, EquipmentLine, EquipmentLineItem, AdditionalPrices,
     EquipmentList, EquipmentListLineItem, EquipmentListItem, PaymentLog, CrmDeal,
-    CommercialProposal, ExchangeRate, CostCalculation, ProposalTemplate, SectionTemplate, SystemSettings
+    CommercialProposal, ExchangeRate, CostCalculation, ProposalTemplate, SectionTemplate, SystemSettings,
+    ProposalHeaderTemplate, UserDefaultHeader
 )
 from .serializers import (
     UserRegistrationSerializer, UserLoginSerializer, UserSerializer, UserAdminUpdateSerializer,
@@ -47,7 +49,8 @@ from .serializers import (
     AdditionalPricesSerializer, EquipmentListSerializer, EquipmentListLineItemSerializer,
     EquipmentListItemSerializer, PaymentLogSerializer, CommercialProposalSerializer,
     ExchangeRateSerializer, CostCalculationSerializer, CostCalculationRequestSerializer, ProposalTemplateSerializer,
-    SectionTemplateSerializer, CrmDealSerializer
+    SectionTemplateSerializer, CrmDealSerializer,
+    ProposalHeaderTemplateSerializer
 )
 from .services import CostCalculationService, DataAggregatorService
 from core.services.exchange_rate_service import ExchangeRateService
@@ -4266,4 +4269,127 @@ class EquipmentProposalExcelExportView(APIView):
         response["Content-Disposition"] = 'attachment; filename="proposal_equipment_export.xlsx"'
         wb.save(response)
         return response
+
+
+# ── Proposal Header Templates (Шапки КП) ──────────────────────────────────────
+
+class ProposalHeaderTemplateListCreateView(APIView):
+    """
+    GET  /api/proposal-headers/  — список всех шапок КП
+    POST /api/proposal-headers/  — создать новую шапку (multipart/form-data)
+    """
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+
+    def get_permissions(self):
+        if self.request.method in permissions.SAFE_METHODS:
+            return [permissions.IsAuthenticated(), IsAtLeastJuniorManager()]
+        return [permissions.IsAuthenticated(), IsManagerOrAdmin()]
+
+    def get(self, request):
+        headers = ProposalHeaderTemplate.objects.all()
+        serializer = ProposalHeaderTemplateSerializer(headers, many=True, context={'request': request})
+        return Response(serializer.data)
+
+    def post(self, request):
+        serializer = ProposalHeaderTemplateSerializer(data=request.data, context={'request': request})
+        serializer.is_valid(raise_exception=True)
+        instance = serializer.save(created_by=request.user)
+
+        # Handle logo upload
+        if 'logo' in request.FILES:
+            instance.logo = request.FILES['logo']
+            instance.save()
+
+        return Response(
+            ProposalHeaderTemplateSerializer(instance, context={'request': request}).data,
+            status=status.HTTP_201_CREATED
+        )
+
+
+class ProposalHeaderTemplateDetailView(APIView):
+    """
+    GET    /api/proposal-headers/<pk>/
+    PUT    /api/proposal-headers/<pk>/
+    DELETE /api/proposal-headers/<pk>/
+    """
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+
+    def get_permissions(self):
+        if self.request.method in permissions.SAFE_METHODS:
+            return [permissions.IsAuthenticated(), IsAtLeastJuniorManager()]
+        return [permissions.IsAuthenticated(), IsManagerOrAdmin()]
+
+    def _get_object(self, pk):
+        try:
+            return ProposalHeaderTemplate.objects.get(pk=pk)
+        except ProposalHeaderTemplate.DoesNotExist:
+            return None
+
+    def get(self, request, pk):
+        obj = self._get_object(pk)
+        if not obj:
+            return Response({'detail': 'Шапка не найдена'}, status=status.HTTP_404_NOT_FOUND)
+        serializer = ProposalHeaderTemplateSerializer(obj, context={'request': request})
+        return Response(serializer.data)
+
+    def put(self, request, pk):
+        obj = self._get_object(pk)
+        if not obj:
+            return Response({'detail': 'Шапка не найдена'}, status=status.HTTP_404_NOT_FOUND)
+        serializer = ProposalHeaderTemplateSerializer(obj, data=request.data, partial=True, context={'request': request})
+        serializer.is_valid(raise_exception=True)
+        instance = serializer.save()
+
+        if 'logo' in request.FILES:
+            instance.logo = request.FILES['logo']
+            instance.save()
+
+        return Response(ProposalHeaderTemplateSerializer(instance, context={'request': request}).data)
+
+    def delete(self, request, pk):
+        obj = self._get_object(pk)
+        if not obj:
+            return Response({'detail': 'Шапка не найдена'}, status=status.HTTP_404_NOT_FOUND)
+        obj.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class SetDefaultHeaderView(APIView):
+    """
+    POST /api/proposal-headers/<pk>/set-default/
+    Устанавливает шапку КП по умолчанию для авторизованного пользователя.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, pk):
+        try:
+            header = ProposalHeaderTemplate.objects.get(pk=pk)
+        except ProposalHeaderTemplate.DoesNotExist:
+            return Response({'detail': 'Шапка не найдена'}, status=status.HTTP_404_NOT_FOUND)
+
+        UserDefaultHeader.objects.update_or_create(
+            user=request.user,
+            defaults={'header_template': header}
+        )
+        return Response({'detail': 'Шапка по умолчанию обновлена', 'header_id': header.pk})
+
+
+class MyDefaultHeaderView(APIView):
+    """
+    GET /api/proposal-headers/my-default/
+    Возвращает текущую шапку КП по умолчанию для авторизованного пользователя.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        try:
+            default = UserDefaultHeader.objects.select_related('header_template').get(user=request.user)
+            if default.header_template:
+                serializer = ProposalHeaderTemplateSerializer(
+                    default.header_template, context={'request': request}
+                )
+                return Response(serializer.data)
+        except UserDefaultHeader.DoesNotExist:
+            pass
+        return Response(None, status=status.HTTP_200_OK)
 

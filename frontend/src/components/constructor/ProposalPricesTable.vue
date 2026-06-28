@@ -19,7 +19,6 @@
           <td>{{ Number(index) + 1 }}</td>
           <td>
             <div class="item-name">{{ item.name }}</div>
-            <div class="item-desc" v-if="item.description">{{ item.description }}</div>
             <div class="item-article" v-if="item.article">Арт: {{ item.article }}</div>
           </td>
           <td class="text-center">{{ item.quantity }}</td>

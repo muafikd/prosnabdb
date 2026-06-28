@@ -1,11 +1,14 @@
 <template>
   <div class="proposal-specs-container">
-    <div v-for="item in items" :key="item.equipment_id" class="spec-block">
-      <div v-if="hasSpecs(item.equipment_id)">
-        <h3>{{ item.name }}</h3>
+    <div v-for="(item, index) in itemsWithSpecs" :key="item.equipment_id" class="spec-block">
+      <div>
+        <h3>{{ index + 1 }}. {{ item.name }}</h3>
         
         <table class="specs-table">
           <thead>
+             <tr v-if="item.description">
+               <th colspan="3" class="col-description">{{ item.description }}</th>
+             </tr>
              <tr>
                <th class="col-param">Параметр</th>
                <th class="col-value">Значение</th>
@@ -68,6 +71,9 @@ const props = defineProps<{
 
 const items = computed(() => props.dataPackage?.equipment_list || [])
 const specsMap = computed(() => props.dataPackage?.equipment_specifications || {})
+const itemsWithSpecs = computed(() => {
+  return items.value.filter((item: any) => hasSpecs(item.equipment_id))
+})
 
 const hasSpecs = (id: number) => {
   return specsMap.value[id] && specsMap.value[id].length > 0
